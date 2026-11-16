@@ -712,6 +712,19 @@ function serveStatic(req, res, pathname) {
   });
 }
 
+// ---------- CORS ----------
+// O app Flutter rodando no Chrome (flutter run -d chrome) fica em outra porta do localhost,
+// então o navegador só deixa ele chamar a API se o servidor autorizar a origem.
+// Em desenvolvimento: qualquer porta de localhost/127.0.0.1. Em produção: só o que estiver em CORS_ORIGINS.
+// Não liberamos credenciais (cookies): o app usa token Bearer, então outra origem não aproveita a sessão do site.
+const DEV_ORIGIN_RE = /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
+const EXTRA_ORIGINS = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+function corsHeaders(req) {
+  const origin = req.headers.origin;
+  const allowed = origin && (EXTRA_ORIGINS.includes(origin) || (process.env.NODE_ENV !== 'production' && DEV_ORIGIN_RE.test(origin)));
+  return allowed ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {};
+}
+
 // ---------- servidor ----------
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -719,7 +732,19 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
     return serveStatic(req, res, url.pathname);
   }
-  const ctx = { req, res, headers: {}, query: Object.fromEntries(url.searchParams), params: {}, body: {} };
+  const cors = corsHeaders(req);
+  // Preflight: o navegador pergunta antes de mandar Authorization / X-Client / JSON
+  if (req.method === 'OPTIONS') {
+    if (!cors['Access-Control-Allow-Origin']) { res.writeHead(403); return res.end(); }
+    res.writeHead(204, {
+      ...cors,
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Client',
+      'Access-Control-Max-Age': '600',
+    });
+    return res.end();
+  }
+  const ctx = { req, res, headers: { ...cors }, query: Object.fromEntries(url.searchParams), params: {}, body: {} };
   try {
     let matched = null;
     for (const r of routes) {
@@ -740,7 +765,7 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     if (err instanceof HttpError) return send(res, err.status, { error: err.message, fields: err.fields }, ctx.headers);
     console.error(err);
-    send(res, 500, { error: 'Erro interno do servidor.' });
+    send(res, 500, { error: 'Erro interno do servidor.' }, cors);
   }
 });
 

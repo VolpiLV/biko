@@ -19,7 +19,7 @@ O `go_router` fica na 17.x de propósito. A 18.x já exige o pacote `material_ui
 ```bash
 cd mobile
 # gera as pastas android/ e ios/ (não sobrescreve lib/, test/, pubspec.yaml nem README)
-flutter create . --project-name biko_mobile --org br.senai.biko --platforms android,ios
+flutter create . --project-name biko_mobile --org br.senai.biko --platforms android,ios,web
 flutter pub get
 ```
 
@@ -34,9 +34,12 @@ Em `android/app/src/main/AndroidManifest.xml`:
 2. Rode o app:
 
 ```bash
+flutter run -d chrome                                      # navegador (usa http://localhost:3000)
 flutter run                                                # emulador Android (usa http://10.0.2.2:3000)
 flutter run --dart-define=API_URL=http://192.168.0.10:3000 # celular físico (IP do computador na rede)
 ```
+
+No Chrome, o app roda em outra porta do `localhost`. O `server.js` libera essa origem por CORS (qualquer porta de `localhost`/`127.0.0.1`, e só fora de produção). Em produção, a lista de origens vem da variável `CORS_ORIGINS`, separada por vírgulas. O Chrome serve para testar rápido, mas a entrega final é o APK Android.
 
 Testes e análise:
 

@@ -698,6 +698,38 @@ async function t(name, fn) {
     await admin('PATCH', `/api/users/${id}`, { active: true });
   });
 
+  // ---------- CORS (app Flutter no Chrome) ----------
+  await t('cors: preflight de localhost em outra porta é liberado', async () => {
+    const r = await fetch(base + '/api/auth/login', {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:54321', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,x-client' },
+    });
+    assert.strictEqual(r.status, 204);
+    assert.strictEqual(r.headers.get('access-control-allow-origin'), 'http://localhost:54321');
+    assert.match(r.headers.get('access-control-allow-headers'), /Authorization/);
+    assert.match(r.headers.get('access-control-allow-headers'), /X-Client/);
+    assert.strictEqual(r.headers.get('access-control-allow-credentials'), null);
+  });
+  await t('cors: origem externa é recusada', async () => {
+    const pre = await fetch(base + '/api/auth/login', { method: 'OPTIONS', headers: { Origin: 'https://site-malicioso.com' } });
+    assert.strictEqual(pre.status, 403);
+    assert.strictEqual(pre.headers.get('access-control-allow-origin'), null);
+    const get = await fetch(base + '/api/auth/me', { headers: { Origin: 'http://localhost.evil.com' } });
+    assert.strictEqual(get.headers.get('access-control-allow-origin'), null);
+  });
+  await t('cors: respostas de sucesso e de erro levam o cabeçalho (o app consegue ler o erro)', async () => {
+    const origin = 'http://127.0.0.1:8080';
+    const ok = await fetch(base + '/api/auth/login', {
+      method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'X-Client': 'mobile' },
+      body: JSON.stringify({ email: 'cliente@biko.com', password: 'Cliente@123' }),
+    });
+    assert.strictEqual(ok.status, 200);
+    assert.strictEqual(ok.headers.get('access-control-allow-origin'), origin);
+    const err = await fetch(base + '/api/auth/me', { headers: { Origin: origin } });
+    assert.strictEqual(err.status, 401);
+    assert.strictEqual(err.headers.get('access-control-allow-origin'), origin);
+  });
+
   // ---------- PAGINAÇÃO ----------
   await t('paginação /api/users: páginas não se repetem e cobrem o total', async () => {
     const p1 = (await admin('GET', '/api/users?limit=2')).data;
