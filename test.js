@@ -634,6 +634,114 @@ async function t(name, fn) {
     assert.ok(Array.isArray(p.proximos));
   });
 
+  // ---------- TOKEN BEARER (app mobile) ----------
+  const bearer = (token) => async (method, url, body) => {
+    const res = await fetch(base + url, {
+      method,
+      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), Authorization: `Bearer ${token}` },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let data = {};
+    try { data = await res.json(); } catch (e) { /* sem corpo */ }
+    return { status: res.status, data, res };
+  };
+  const mobileLogin = (email, password) => fetch(base + '/api/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Client': 'mobile' }, body: JSON.stringify({ email, password }),
+  });
+  let mobileToken;
+  await t('bearer: login com X-Client: mobile devolve token no corpo e não seta cookie', async () => {
+    const r = await mobileLogin('cliente@biko.com', 'Cliente@123');
+    const data = await r.json();
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.headers.get('set-cookie'), null);
+    assert.match(data.token, /^[a-f0-9]{64}$/);
+    assert.strictEqual(data.token_type, 'Bearer');
+    assert.ok(data.expires_at > Date.now());
+    mobileToken = data.token;
+  });
+  await t('bearer: login web (sem X-Client) continua sem token no corpo', async () => {
+    const r = await anon('POST', '/api/auth/login', { email: 'cliente@biko.com', password: 'Cliente@123' });
+    assert.strictEqual(r.data.token, undefined);
+    assert.ok(r.res.headers.get('set-cookie'));
+  });
+  await t('bearer: cadastro mobile já devolve token utilizável', async () => {
+    const r = await fetch(base + '/api/auth/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Client': 'mobile' },
+      body: JSON.stringify({ name: 'Mobile Teste', email: 'mobile@x.com', password: 'Senha1234' }),
+    });
+    const data = await r.json();
+    assert.strictEqual(r.status, 201);
+    assert.strictEqual((await bearer(data.token)('GET', '/api/auth/me')).data.user.email, 'mobile@x.com');
+  });
+  await t('bearer: token válido acessa rotas protegidas e respeita o perfil', async () => {
+    const me = await bearer(mobileToken)('GET', '/api/auth/me');
+    assert.strictEqual(me.status, 200);
+    assert.strictEqual(me.data.user.role, 'cliente');
+    assert.strictEqual((await bearer(mobileToken)('GET', '/api/users')).status, 403);
+  });
+  await t('bearer: token malformado, inexistente ou esquema errado -> 401', async () => {
+    assert.strictEqual((await bearer('abc')('GET', '/api/auth/me')).status, 401);
+    assert.strictEqual((await bearer('f'.repeat(64))('GET', '/api/auth/me')).status, 401);
+    const basic = await fetch(base + '/api/auth/me', { headers: { Authorization: `Basic ${mobileToken}` } });
+    assert.strictEqual(basic.status, 401);
+  });
+  await t('bearer: logout invalida o token', async () => {
+    const tk = (await (await mobileLogin('cliente@biko.com', 'Cliente@123')).json()).token;
+    assert.strictEqual((await bearer(tk)('POST', '/api/auth/logout')).status, 200);
+    assert.strictEqual((await bearer(tk)('GET', '/api/auth/me')).status, 401);
+  });
+  await t('bearer: admin desativando a conta derruba o token na hora', async () => {
+    const tk = (await (await mobileLogin('mobile@x.com', 'Senha1234')).json()).token;
+    const id = (await bearer(tk)('GET', '/api/auth/me')).data.user.id;
+    await admin('PATCH', `/api/users/${id}`, { active: false });
+    assert.strictEqual((await bearer(tk)('GET', '/api/auth/me')).status, 401);
+    await admin('PATCH', `/api/users/${id}`, { active: true });
+  });
+
+  // ---------- PAGINAÇÃO ----------
+  await t('paginação /api/users: páginas não se repetem e cobrem o total', async () => {
+    const p1 = (await admin('GET', '/api/users?limit=2')).data;
+    assert.strictEqual(p1.users.length, 2);
+    assert.strictEqual(p1.limit, 2);
+    assert.strictEqual(p1.offset, 0);
+    assert.ok(p1.total > 2);
+    assert.strictEqual(p1.has_more, true);
+    const ids = [];
+    for (let off = 0; off < p1.total; off += 2) ids.push(...(await admin('GET', `/api/users?limit=2&offset=${off}`)).data.users.map((u) => u.id));
+    assert.strictEqual(ids.length, p1.total);
+    assert.strictEqual(new Set(ids).size, p1.total);
+    const last = (await admin('GET', `/api/users?limit=2&offset=${p1.total - 1}`)).data;
+    assert.strictEqual(last.has_more, false);
+  });
+  await t('paginação /api/users: total respeita os filtros', async () => {
+    const d = (await admin('GET', '/api/users?role=prestador&limit=1')).data;
+    assert.ok(d.users.every((u) => u.role === 'prestador'));
+    assert.strictEqual(d.total, (await admin('GET', '/api/users?role=prestador&limit=100')).data.users.length);
+  });
+  await t('paginação /api/orders: mesma ordem paginada ou não, total por perfil', async () => {
+    const all = (await cliente('GET', '/api/orders?limit=100')).data;
+    assert.strictEqual(all.total, all.orders.length);
+    const p1 = (await cliente('GET', '/api/orders?limit=1')).data;
+    const p2 = (await cliente('GET', '/api/orders?limit=1&offset=1')).data;
+    assert.deepStrictEqual([p1.orders[0].id, p2.orders[0].id], all.orders.slice(0, 2).map((o) => o.id));
+    const pend = (await cliente('GET', '/api/orders?status=pendente&limit=1')).data;
+    assert.strictEqual(pend.total, all.orders.filter((o) => o.status === 'pendente').length);
+  });
+  await t('paginação: limit/offset inválidos -> 400; limit acima do máximo é limitado a 100', async () => {
+    for (const q of ['limit=0', 'limit=-1', 'limit=abc', 'offset=-5', 'offset=1.5']) {
+      assert.strictEqual((await admin('GET', `/api/users?${q}`)).status, 400, q);
+      assert.strictEqual((await admin('GET', `/api/orders?${q}`)).status, 400, q);
+    }
+    assert.strictEqual((await admin('GET', '/api/users?limit=5000')).data.limit, 100);
+    assert.strictEqual((await admin('GET', '/api/users?offset=9999')).data.users.length, 0);
+  });
+  await t('resumo do admin bate com as listagens; outros perfis 403', async () => {
+    const r = (await admin('GET', '/api/admin/resumo')).data;
+    assert.strictEqual(r.pedidos, (await admin('GET', '/api/orders')).data.total);
+    assert.strictEqual(r.prestadores, (await admin('GET', '/api/users?role=prestador')).data.total);
+    assert.strictEqual((await cliente('GET', '/api/admin/resumo')).status, 403);
+  });
+
   // ---------- FORÇA BRUTA ----------
   await t('bloqueia após 5 tentativas erradas (429)', async () => {
     let last;

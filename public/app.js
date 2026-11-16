@@ -327,17 +327,15 @@ async function homeHtml() {
       <div class="section-title"><span>Próximos atendimentos</span></div>${prox}`;
   }
   if (role === 'admin') {
-    const [{ users }, { orders }] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/orders')]);
-    const c = (r) => users.filter((u) => u.role === r).length;
-    const n = (s) => orders.filter((o) => o.status === s).length;
+    const r = await api('GET', '/api/admin/resumo');
     return `<div class="stats">
-      <div class="stat"><b>${c('cliente')}</b><small>Clientes</small></div>
-      <div class="stat"><b>${c('prestador')}</b><small>Prestadores</small></div>
-      <div class="stat"><b>${users.filter((u) => !u.active).length}</b><small>Desativados</small></div></div>
+      <div class="stat"><b>${r.clientes}</b><small>Clientes</small></div>
+      <div class="stat"><b>${r.prestadores}</b><small>Prestadores</small></div>
+      <div class="stat"><b>${r.desativados}</b><small>Desativados</small></div></div>
       <div class="stats">
-      <div class="stat"><b>${orders.length}</b><small>Pedidos</small></div>
-      <div class="stat"><b>${n('pendente')}</b><small>Pendentes</small></div>
-      <div class="stat"><b>${n('concluido')}</b><small>Concluídos</small></div></div>
+      <div class="stat"><b>${r.pedidos}</b><small>Pedidos</small></div>
+      <div class="stat"><b>${r.pendentes}</b><small>Pendentes</small></div>
+      <div class="stat"><b>${r.concluidos}</b><small>Concluídos</small></div></div>
       <div class="empty">Use a aba <b>Usuários</b> para gerenciar contas e a aba <b>Pedidos</b> para acompanhar os agendamentos.</div>`;
   }
   const d = await api('GET', '/api/cliente/home');
@@ -507,15 +505,38 @@ function orderCard(o) {
 
 async function ordersHtml() {
   const f = state.orderFilter;
-  state.orders = (await api('GET', '/api/orders' + (f ? `?status=${f}` : ''))).orders;
+  const d = await api('GET', '/api/orders' + (f ? `?status=${f}` : ''));
+  state.orders = d.orders; state.ordersPage = d;
   return `<div class="toolbar"><select id="oFilter"><option value="">Todos os status</option>${Object.entries(STATUS_LABEL).map(([v, l]) => `<option value="${v}" ${f === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div class="count">${state.orders.length} pedido(s)</div>
-    ${state.orders.length ? state.orders.map(orderCard).join('')
+    <div class="count">${d.total} pedido(s)</div>
+    ${state.orders.length ? `<div id="orderList">${state.orders.map(orderCard).join('')}</div>${moreButton('moreOrders', d.has_more)}`
       : `<div class="empty">${f ? 'Nenhum pedido com esse status.' : state.user.role === 'cliente' ? 'Você ainda não fez nenhum pedido.<br>Use a aba Buscar para encontrar um profissional.' : state.user.role === 'prestador' ? 'Você ainda não tem pedidos.<br>Quando um cliente agendar, ele aparecerá aqui.' : 'Nenhum pedido registrado.'}</div>`}`;
+}
+
+// Botão "Carregar mais" das listas paginadas (pedidos e usuários)
+const moreButton = (id, show) => `<div class="pad" id="${id}Wrap" ${show ? '' : 'hidden'}><button class="btn small secondary" id="${id}">Carregar mais</button></div>`;
+async function loadMore(btnId, url, key, render, onDone) {
+  const btn = document.getElementById(btnId);
+  btn.disabled = true; btn.textContent = 'Carregando...';
+  try {
+    const sep = url.includes('?') ? '&' : '?';
+    const d = await api('GET', `${url}${sep}offset=${state[key].length}`);
+    state[key] = state[key].concat(d[key]);
+    render(d[key]);
+    document.getElementById(`${btnId}Wrap`).hidden = !d.has_more;
+    onDone && onDone();
+  } catch (err) { toast(err.message, true); }
+  finally { btn.disabled = false; btn.textContent = 'Carregar mais'; }
 }
 
 function bindOrders() {
   document.getElementById('oFilter').onchange = (e) => { state.orderFilter = e.target.value; viewApp(); };
+  const more = document.getElementById('moreOrders');
+  if (more) {
+    const f = state.orderFilter;
+    more.onclick = () => loadMore('moreOrders', '/api/orders' + (f ? `?status=${f}` : ''), 'orders',
+      (items) => document.getElementById('orderList').insertAdjacentHTML('beforeend', items.map(orderCard).join('')), bindOrderCards);
+  }
   bindOrderCards();
 }
 function bindOrderCards() {
@@ -743,8 +764,12 @@ async function logout() {
 
 // ---------- gestão de usuários (admin) ----------
 async function loadUsers() {
+  const d = await api('GET', usersUrl());
+  state.users = d.users; state.usersPage = d;
+}
+function usersUrl() {
   const q = new URLSearchParams(Object.entries(state.filters).filter(([, v]) => v)).toString();
-  state.users = (await api('GET', '/api/users' + (q ? '?' + q : ''))).users;
+  return '/api/users' + (q ? '?' + q : '');
 }
 
 function usersHtml() {
@@ -757,8 +782,9 @@ function usersHtml() {
       </div>
       <button class="btn small" id="newUser" style="justify-self:end">+ Novo usuário</button>
     </div>
-    <div class="count">${state.users.length} usuário(s)</div>
-    <div id="list">${state.users.length ? state.users.map(userRow).join('') : '<div class="empty">Nenhum resultado encontrado.</div>'}</div>`;
+    <div class="count">${state.usersPage.total} usuário(s)</div>
+    <div id="list">${state.users.length ? state.users.map(userRow).join('') : '<div class="empty">Nenhum resultado encontrado.</div>'}</div>
+    ${moreButton('moreUsers', state.usersPage.has_more)}`;
 }
 
 function userRow(u) {
@@ -776,6 +802,8 @@ function bindUsers() {
   document.getElementById('fRole').onchange = async (e) => { state.filters.role = e.target.value; await refreshList(); };
   document.getElementById('fStatus').onchange = async (e) => { state.filters.status = e.target.value; await refreshList(); };
   document.getElementById('newUser').onclick = () => userModal(null);
+  document.getElementById('moreUsers').onclick = () => loadMore('moreUsers', usersUrl(), 'users',
+    (items) => document.getElementById('list').insertAdjacentHTML('beforeend', items.map(userRow).join('')), bindRows);
   bindRows();
 }
 function bindRows() {
@@ -784,8 +812,9 @@ function bindRows() {
 async function refreshList() {
   try {
     await loadUsers();
-    document.querySelector('.count').textContent = `${state.users.length} usuário(s)`;
+    document.querySelector('.count').textContent = `${state.usersPage.total} usuário(s)`;
     document.getElementById('list').innerHTML = state.users.length ? state.users.map(userRow).join('') : '<div class="empty">Nenhum resultado encontrado.</div>';
+    document.getElementById('moreUsersWrap').hidden = !state.usersPage.has_more;
     bindRows();
   } catch (err) { toast(err.message, true); }
 }

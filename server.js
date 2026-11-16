@@ -95,6 +95,27 @@ function createSession(userId) {
   return token;
 }
 
+// O app mobile se identifica com "X-Client: mobile" no login/cadastro e recebe o token no corpo
+// (para guardar no flutter_secure_storage). O navegador continua só com cookie HttpOnly,
+// assim o JavaScript da página web nunca enxerga o token.
+const wantsBearer = (req) => String(req.headers['x-client'] || '').toLowerCase() === 'mobile';
+function startSession(ctx, userId) {
+  const token = createSession(userId);
+  if (wantsBearer(ctx.req)) return { token, token_type: 'Bearer', expires_at: now() + SESSION_MS };
+  ctx.headers['Set-Cookie'] = sessionCookie(token);
+  return {};
+}
+
+// Paginação por limit/offset (mesmo padrão do /api/search). Valores inválidos -> 400.
+function parsePage(query, def = 20, max = 100) {
+  const num = (v, fallback) => (v === undefined || v === '' ? fallback : /^\d+$/.test(String(v)) ? Number(v) : NaN);
+  const limit = num(query.limit, def), offset = num(query.offset, 0);
+  if (!Number.isInteger(limit) || limit < 1) fail(400, `O parâmetro limit deve ser um inteiro entre 1 e ${max}.`);
+  if (!Number.isInteger(offset)) fail(400, 'O parâmetro offset deve ser um inteiro maior ou igual a 0.');
+  return { limit: Math.min(limit, max), offset };
+}
+const pageInfo = (total, { limit, offset }) => ({ total, limit, offset, has_more: offset + limit < total });
+
 // Limitador simples de tentativas de login (por e-mail+IP)
 const attempts = new Map();
 const MAX_ATTEMPTS = 5;
@@ -107,9 +128,19 @@ function registerFailure(key) {
 }
 
 // ---------- autenticação / autorização (backend) ----------
+// Aceita "Authorization: Bearer <token>" (app mobile) ou o cookie de sessão (web).
 // Retorna o usuário da sessão ou lança 401/403. Sessões inválidas são removidas.
+function readToken(req) {
+  const auth = req.headers.authorization;
+  if (auth !== undefined) {
+    const m = /^Bearer\s+([a-f0-9]{64})$/i.exec(auth.trim());
+    if (!m) fail(401, 'Token de acesso inválido.');
+    return m[1].toLowerCase();
+  }
+  return parseCookies(req)[COOKIE];
+}
 function authenticate(ctx) {
-  const token = parseCookies(ctx.req)[COOKIE];
+  const token = readToken(ctx.req);
   if (!token) fail(401, 'Não autenticado.');
   const row = db.prepare('SELECT u.*, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?').get(token);
   if (!row || row.expires_at < now()) {
@@ -154,9 +185,9 @@ route('POST', '/api/auth/register', {}, (ctx) => {
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(mail)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
   const info = db.prepare('INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)')
     .run(name.trim(), mail, phone || null, hashPassword(password), finalRole);
-  ctx.headers['Set-Cookie'] = sessionCookie(createSession(info.lastInsertRowid));
+  const session = startSession(ctx, info.lastInsertRowid);
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-  return [201, { user: publicUser(user) }];
+  return [201, { user: publicUser(user), ...session }];
 });
 
 route('POST', '/api/auth/login', {}, (ctx) => {
@@ -172,8 +203,7 @@ route('POST', '/api/auth/login', {}, (ctx) => {
   }
   if (!user.active) fail(403, 'Sua conta está desativada. Fale com o administrador.');
   attempts.delete(key);
-  ctx.headers['Set-Cookie'] = sessionCookie(createSession(user.id));
-  return [200, { user: publicUser(user) }];
+  return [200, { user: publicUser(user), ...startSession(ctx, user.id) }];
 });
 
 route('POST', '/api/auth/logout', { auth: true }, (ctx) => {
@@ -231,8 +261,20 @@ route('GET', '/api/users', { auth: true, roles: ['admin'] }, (ctx) => {
   if (ROLES.includes(role)) { where.push('role = ?'); params.push(role); }
   if (status === 'ativo') where.push('active = 1');
   if (status === 'inativo') where.push('active = 0');
-  const sql = `SELECT * FROM users ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY name COLLATE NOCASE`;
-  return [200, { users: db.prepare(sql).all(...params).map(publicUser) }];
+  const page = parsePage(ctx.query);
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM users ${whereSql}`).get(...params).n;
+  // id no ORDER BY desempata nomes iguais, senão a mesma pessoa poderia aparecer em duas páginas
+  const rows = db.prepare(`SELECT * FROM users ${whereSql} ORDER BY name COLLATE NOCASE, id LIMIT ? OFFSET ?`).all(...params, page.limit, page.offset);
+  return [200, { users: rows.map(publicUser), ...pageInfo(total, page) }];
+});
+
+// Números do painel do admin calculados no banco (não depende de baixar listas inteiras)
+route('GET', '/api/admin/resumo', { auth: true, roles: ['admin'] }, () => {
+  const u = db.prepare(`SELECT SUM(role = 'cliente') AS clientes, SUM(role = 'prestador') AS prestadores, SUM(active = 0) AS desativados FROM users`).get();
+  const o = db.prepare(`SELECT COUNT(*) AS pedidos, SUM(status = 'pendente') AS pendentes, SUM(status = 'concluido') AS concluidos FROM orders`).get();
+  const n = (v) => Number(v || 0);
+  return [200, { clientes: n(u.clientes), prestadores: n(u.prestadores), desativados: n(u.desativados), pedidos: n(o.pedidos), pendentes: n(o.pendentes), concluidos: n(o.concluidos) }];
 });
 
 route('POST', '/api/users', { auth: true, roles: ['admin'] }, (ctx) => {
@@ -612,8 +654,11 @@ route('GET', '/api/orders', { auth: true }, (ctx) => {
   if (ctx.user.role === 'cliente') { where.push('o.client_id = ?'); params.push(ctx.user.id); }
   else if (ctx.user.role === 'prestador') { where.push('o.provider_id = ?'); params.push(ctx.user.id); }
   if (status) { where.push('o.status = ?'); params.push(status); }
-  const rows = db.prepare(`${ORDER_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY o.start_ts DESC, o.id DESC`).all(...params);
-  return [200, { orders: rows.map((o) => orderView(o, ctx.user)) }];
+  const page = parsePage(ctx.query);
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM orders o ${whereSql}`).get(...params).n;
+  const rows = db.prepare(`${ORDER_SELECT} ${whereSql} ORDER BY o.start_ts DESC, o.id DESC LIMIT ? OFFSET ?`).all(...params, page.limit, page.offset);
+  return [200, { orders: rows.map((o) => orderView(o, ctx.user)), ...pageInfo(total, page) }];
 });
 
 route('GET', '/api/orders/:id', { auth: true }, (ctx) => {
