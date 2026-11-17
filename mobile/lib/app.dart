@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
@@ -40,6 +41,10 @@ class _BikoAppState extends State<BikoApp> {
       darkTheme: AppTheme.dark,
       themeMode: themeMode,
       routerConfig: _router,
+      // Calendário, botões padrão e textos do sistema em português.
+      locale: const Locale('pt', 'BR'),
+      supportedLocales: const [Locale('pt', 'BR')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
     );
   }
 }

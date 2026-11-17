@@ -105,6 +105,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: AppSpacing.sm),
                 AppButton(label: 'Entrar', loading: vm.loading, onPressed: _submit),
+                Center(
+                  child: TextButton(
+                    onPressed: vm.loading ? null : () => context.push(AppRoutes.forgot),
+                    child: const Text('Esqueci a senha'),
+                  ),
+                ),
                 const SizedBox(height: AppSpacing.md),
                 Wrap(
                   alignment: WrapAlignment.center,
@@ -118,6 +124,14 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: const Text('Criar conta'),
                     ),
                   ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'Demo: admin@biko.com / Admin@123\n'
+                  'cliente@biko.com / Cliente@123\n'
+                  'prestador@biko.com / Prestador@123',
+                  textAlign: TextAlign.center,
+                  style: textTheme.bodySmall,
                 ),
               ],
             ),

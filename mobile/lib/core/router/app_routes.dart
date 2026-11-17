@@ -4,6 +4,8 @@ abstract final class AppRoutes {
   static const String login = '/login';
   static const String registerSegment = 'cadastro';
   static const String register = '$login/$registerSegment';
+  static const String forgotSegment = 'recuperar-senha';
+  static const String forgot = '$login/$forgotSegment';
   static const String home = '/home';
 
   /// Rotas que não exigem login.

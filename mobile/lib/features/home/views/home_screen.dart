@@ -1,30 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../../core/theme/app_tokens.dart';
 import '../../../data/models/user_model.dart';
-import '../../../shared/widgets/confirm_dialog.dart';
-import '../../../shared/widgets/role_badge.dart';
+import '../../../data/models/user_role.dart';
+import '../../../data/remote/admin_service.dart';
+import '../../../data/remote/catalog_service.dart';
+import '../../../data/remote/order_service.dart';
 import '../../../shared/widgets/state_views.dart';
 import '../../../shared/widgets/user_avatar.dart';
+import '../../account/views/account_tab.dart';
+import '../../admin/viewmodels/users_view_model.dart';
+import '../../admin/views/users_tab.dart';
 import '../../auth/viewmodels/session_view_model.dart';
+import '../../orders/viewmodels/orders_view_model.dart';
+import '../../orders/views/orders_tab.dart';
+import '../../search/viewmodels/search_view_model.dart';
+import '../../search/views/search_tab.dart';
+import '../../services/viewmodels/my_services_view_model.dart';
+import '../../services/views/services_tab.dart';
 import '../../settings/widgets/theme_mode_button.dart';
+import '../viewmodels/dashboard_view_model.dart';
+import '../viewmodels/home_navigation.dart';
+import 'dashboard_tab.dart';
 
-/// Tela inicial após o login. Por enquanto mostra os dados reais da conta logada;
-/// os atalhos de cada perfil (busca, pedidos, gestão) entram nas próximas etapas.
+/// Área logada: abas conforme o perfil (cliente, prestador ou admin).
+/// Os ViewModels das abas vivem aqui, então filtros e listas não se perdem ao trocar de aba.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
-
-  Future<void> _confirmLogout(BuildContext context) async {
-    final session = context.read<SessionViewModel>();
-    final confirmed = await showConfirmDialog(
-      context,
-      title: 'Sair da conta?',
-      message: 'Você precisará entrar novamente para usar o app.',
-      confirmLabel: 'Sair',
-    );
-    if (confirmed) await session.signOut();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -32,62 +34,112 @@ class HomeScreen extends StatelessWidget {
     // Durante a troca de rota após o logout o usuário já é nulo por um instante.
     if (user == null) return const Scaffold(body: LoadingView());
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Olá, ${user.firstName}'),
-        actions: [
-          const ThemeModeButton(),
-          IconButton(
-            tooltip: 'Sair',
-            icon: const Icon(Icons.logout),
-            onPressed: () => _confirmLogout(context),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          children: [_AccountCard(user: user)],
+    final catalog = context.read<CatalogService>();
+    final orders = context.read<OrderService>();
+    final admin = context.read<AdminService>();
+
+    return MultiProvider(
+      // Outro usuário (ou perfil alterado) = estado novo.
+      key: ValueKey('${user.id}-${user.role.apiValue}'),
+      providers: [
+        ChangeNotifierProvider(create: (_) => HomeNavigation(user.role)),
+        ChangeNotifierProvider(
+          create: (_) => DashboardViewModel(role: user.role, catalog: catalog, orders: orders, admin: admin),
         ),
-      ),
+        ChangeNotifierProvider(create: (_) => OrdersViewModel(orders)),
+        ChangeNotifierProvider(create: (_) => SearchViewModel(catalog)),
+        ChangeNotifierProvider(create: (_) => MyServicesViewModel(catalog)),
+        ChangeNotifierProvider(create: (_) => UsersViewModel(admin)),
+      ],
+      child: _HomeShell(user: user),
     );
   }
 }
 
-class _AccountCard extends StatelessWidget {
-  const _AccountCard({required this.user});
+class _HomeShell extends StatelessWidget {
+  const _HomeShell({required this.user});
 
   final UserModel user;
 
+  String get _subtitle => switch (user.role) {
+        UserRole.cliente => 'O que você precisa hoje?',
+        UserRole.prestador => 'Veja seus pedidos de hoje',
+        UserRole.admin => 'Painel administrativo',
+      };
+
+  Widget _tabBody(AppTab tab) => switch (tab) {
+        AppTab.home => const DashboardTab(),
+        AppTab.search => const SearchTab(),
+        AppTab.services => const ServicesTab(),
+        AppTab.users => const UsersTab(),
+        AppTab.orders => OrdersTab(role: user.role),
+        AppTab.account => const AccountTab(),
+      };
+
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    final phone = user.phone;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Row(
+    final nav = context.watch<HomeNavigation>();
+    final theme = Theme.of(context);
+    // No Chrome em tela larga a navegação vai para a lateral.
+    final wide = MediaQuery.sizeOf(context).width >= 840;
+
+    final body = KeyedSubtree(key: ValueKey(nav.current), child: _tabBody(nav.current));
+
+    return Scaffold(
+      appBar: AppBar(
+        toolbarHeight: 68,
+        title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            UserAvatar(user: user),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(user.name, style: textTheme.titleMedium),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(user.email, style: textTheme.bodyMedium),
-                  if (phone != null && phone.isNotEmpty)
-                    Text(phone, style: textTheme.bodyMedium),
-                  const SizedBox(height: AppSpacing.sm),
-                  RoleBadge(role: user.role),
-                ],
-              ),
-            ),
+            Text('Olá, ${user.firstName} 👋', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+            Text(_subtitle, style: theme.textTheme.bodySmall),
           ],
         ),
+        actions: [
+          const ThemeModeButton(),
+          Padding(
+            padding: const EdgeInsets.only(right: 12, left: 4),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () => nav.goTo(AppTab.account),
+              child: UserAvatar(user: user, radius: 20),
+            ),
+          ),
+        ],
       ),
+      body: SafeArea(
+        child: wide
+            ? Row(
+                children: [
+                  NavigationRail(
+                    selectedIndex: nav.index,
+                    labelType: NavigationRailLabelType.all,
+                    onDestinationSelected: (i) => nav.goTo(nav.tabs[i]),
+                    destinations: [
+                      for (final t in nav.tabs)
+                        NavigationRailDestination(
+                          icon: Icon(t.icon),
+                          selectedIcon: Icon(t.selectedIcon),
+                          label: Text(t.label),
+                        ),
+                    ],
+                  ),
+                  const VerticalDivider(width: 1),
+                  Expanded(child: body),
+                ],
+              )
+            : body,
+      ),
+      bottomNavigationBar: wide
+          ? null
+          : NavigationBar(
+              selectedIndex: nav.index,
+              onDestinationSelected: (i) => nav.goTo(nav.tabs[i]),
+              destinations: [
+                for (final t in nav.tabs)
+                  NavigationDestination(icon: Icon(t.icon), selectedIcon: Icon(t.selectedIcon), label: t.label),
+              ],
+            ),
     );
   }
 }

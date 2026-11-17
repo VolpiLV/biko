@@ -50,6 +50,13 @@ class SessionViewModel extends BaseViewModel {
     notify();
   }
 
+  /// Dados da conta mudaram (perfil, foto): atualiza quem estiver mostrando o usuário.
+  void updateUser(UserModel user) {
+    if (_status != SessionStatus.authenticated) return;
+    _user = user;
+    notify();
+  }
+
   Future<void> signOut() async {
     await _repository.logout();
     _user = null;

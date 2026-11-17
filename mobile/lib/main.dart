@@ -8,7 +8,11 @@ import 'app.dart';
 import 'core/network/api_client.dart';
 import 'data/local/preferences_store.dart';
 import 'data/local/token_storage.dart';
+import 'data/remote/admin_service.dart';
 import 'data/remote/auth_service.dart';
+import 'data/remote/catalog_service.dart';
+import 'data/remote/order_service.dart';
+import 'data/remote/profile_service.dart';
 import 'data/repositories/auth_repository.dart';
 import 'features/auth/viewmodels/session_view_model.dart';
 import 'features/settings/viewmodels/theme_view_model.dart';
@@ -30,7 +34,12 @@ Future<void> main() async {
   runApp(
     MultiProvider(
       providers: [
+        Provider<ApiClient>.value(value: api),
         Provider<AuthRepository>.value(value: authRepository),
+        Provider<CatalogService>.value(value: CatalogService(api)),
+        Provider<OrderService>.value(value: OrderService(api)),
+        Provider<AdminService>.value(value: AdminService(api)),
+        Provider<ProfileService>.value(value: ProfileService(api)),
         ChangeNotifierProvider<SessionViewModel>.value(value: session),
         ChangeNotifierProvider<ThemeViewModel>(
           create: (_) => ThemeViewModel(preferences),

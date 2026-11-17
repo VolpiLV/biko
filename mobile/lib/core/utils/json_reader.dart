@@ -14,6 +14,37 @@ int readInt(Map<String, dynamic> json, String key) {
   throw FormatException('Campo "$key" deveria ser um número inteiro.');
 }
 
+/// Números que podem vir inteiros ou decimais (preços, valores em reais).
+double readNum(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value is num) return value.toDouble();
+  throw FormatException('Campo "$key" deveria ser um número.');
+}
+
+double? readNumOrNull(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value == null) return null;
+  if (value is num) return value.toDouble();
+  throw FormatException('Campo "$key" deveria ser um número.');
+}
+
+/// Lista de objetos JSON convertidos com [parse].
+List<T> readList<T>(
+  Map<String, dynamic> json,
+  String key,
+  T Function(Map<String, dynamic>) parse,
+) {
+  final value = json[key];
+  if (value is! List) throw FormatException('Campo "$key" deveria ser uma lista.');
+  return [
+    for (final item in value)
+      if (item is Map<String, dynamic>)
+        parse(item)
+      else
+        throw FormatException('Item inválido em "$key".'),
+  ];
+}
+
 String readString(Map<String, dynamic> json, String key) {
   final value = json[key];
   if (value is String) return value;

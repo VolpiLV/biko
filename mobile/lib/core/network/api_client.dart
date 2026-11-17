@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
@@ -45,6 +46,35 @@ class ApiClient {
 
   Future<T> post<T>(String path, JsonParser<T> parse, {Object? body}) =>
       _send(() => _dio.post<Object?>(path, data: body), parse);
+
+  Future<T> patch<T>(String path, JsonParser<T> parse, {Object? body}) =>
+      _send(() => _dio.patch<Object?>(path, data: body), parse);
+
+  Future<T> put<T>(String path, JsonParser<T> parse, {Object? body}) =>
+      _send(() => _dio.put<Object?>(path, data: body), parse);
+
+  Future<T> delete<T>(String path, JsonParser<T> parse) =>
+      _send(() => _dio.delete<Object?>(path), parse);
+
+  /// Baixa um arquivo binário autenticado (ex.: foto de perfil em /api/photo/:id).
+  Future<Uint8List> getBytes(String path) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        path,
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const AppException(
+          AppErrorKind.invalidResponse,
+          'Arquivo vazio.',
+        );
+      }
+      return Uint8List.fromList(data);
+    } on DioException catch (e) {
+      throw mapDioException(e);
+    }
+  }
 
   Future<T> _send<T>(
     Future<Response<Object?>> Function() request,

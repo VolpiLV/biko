@@ -1,10 +1,13 @@
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import '../../data/remote/profile_service.dart';
 import '../../data/repositories/auth_repository.dart';
+import '../../features/auth/viewmodels/forgot_password_view_model.dart';
 import '../../features/auth/viewmodels/login_view_model.dart';
 import '../../features/auth/viewmodels/register_view_model.dart';
 import '../../features/auth/viewmodels/session_view_model.dart';
+import '../../features/auth/views/forgot_password_screen.dart';
 import '../../features/auth/views/login_screen.dart';
 import '../../features/auth/views/register_screen.dart';
 import '../../features/auth/views/splash_screen.dart';
@@ -56,6 +59,13 @@ GoRouter buildRouter(SessionViewModel session) => GoRouter(
                   context.read<SessionViewModel>(),
                 ),
                 child: const RegisterScreen(),
+              ),
+            ),
+            GoRoute(
+              path: AppRoutes.forgotSegment,
+              builder: (context, state) => ChangeNotifierProvider(
+                create: (context) => ForgotPasswordViewModel(context.read<ProfileService>()),
+                child: const ForgotPasswordScreen(),
               ),
             ),
           ],

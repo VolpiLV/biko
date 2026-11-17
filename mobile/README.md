@@ -62,15 +62,30 @@ View (features/*/views)  ──watch──▶  ViewModel (ChangeNotifier)
 - **ApiClient** é o único ponto que fala HTTP. Ele envia `X-Client: mobile` e `Authorization: Bearer <token>`, e converte todo erro em `AppException` com mensagem amigável.
 - **Sessão persistida:** o token fica no `flutter_secure_storage` (Keystore/Keychain). Na splash, `GET /api/auth/me` confere se ele ainda vale. Sem internet, a splash mostra o erro com "Tentar novamente".
 - **Guard de rotas:** `resolveRedirect` em `core/router/app_router.dart`. Um 401 no meio do uso derruba a sessão e leva para o login com o aviso "sessão expirada".
+- **Serviços sem estado local** (`catalog_service`, `order_service`, `admin_service`, `profile_service`) são usados direto pelos ViewModels; só a autenticação passa por um Repository, porque também guarda o token.
+- **ViewModels base:** `FormViewModel` (carregando + erro geral + erros por campo da API) e `PagedListViewModel` ("Carregar mais", ignora respostas atrasadas quando o filtro muda).
+- **Fotos de perfil:** `/api/photo/:id` exige o token, então o `UserAvatar` baixa a imagem pelo `ApiClient` e mostra com `Image.memory`.
 
-## Telas desta etapa
+## Telas
 
 | Rota | Tela |
 |---|---|
 | `/` | Splash (restaura a sessão) |
 | `/login` | Login |
 | `/login/cadastro` | Cadastro (com `PopScope` para não perder dados) |
-| `/home` | Início (dados da conta, tema, sair) |
+| `/login/recuperar-senha` | Esqueci a senha: pede o código e define a nova senha (em desenvolvimento o código aparece na tela) |
+| `/home` | Área logada com abas conforme o perfil (barra inferior no celular, lateral em tela larga) |
+
+Abas da `/home`, as mesmas do sistema web:
+
+| Aba | Cliente | Prestador | Admin |
+|---|---|---|---|
+| Início | Categorias (toque abre a busca filtrada) | Pedidos novos, ganhos do mês, próximos atendimentos | Resumo de usuários e pedidos |
+| Buscar | Texto, categoria, preço máximo, ordenação e agendamento com horários livres | — | — |
+| Serviços | — | Criar, editar e ativar/desativar serviços | — |
+| Usuários | — | — | Busca, filtros, criar, editar e desativar contas |
+| Pedidos | Detalhe, histórico e cancelar | Confirmar, recusar (com motivo), concluir e cancelar | Todos os pedidos, cancelar |
+| Conta | Foto, meus dados, alterar senha, tema e sair | igual | igual |
 
 ## Usuários de teste
 
