@@ -50,7 +50,7 @@ class OrderService {
         body: {
           'action': action.apiValue,
           if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
-          if (minutes != null) 'minutes': minutes,
+          'minutes': ?minutes,
         },
       );
 
