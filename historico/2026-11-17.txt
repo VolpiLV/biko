@@ -63,3 +63,44 @@ Onde mudou: servidor, tela web e app Flutter (detalhes no README, secao
 "Agenda elastica"). Foram criados testes novos e todos os 98 passam.
 Pendente: rodar "flutter analyze" (o Flutter nao estava no PATH do
 terminal usado nesta conversa).
+
+-------------------------------------------------------------------------
+FLUTTER NOVO NESTA MAQUINA
+-------------------------------------------------------------------------
+
+Problema:
+  - Nao dava para rodar "flutter analyze" no app (pasta mobile).
+  - O Flutter em C:\flutter foi instalado por outro usuario do Windows,
+    entao o git recusa a pasta ("dubious ownership") e o Flutter acha
+    que o git nao existe.
+  - Alem disso, aquele Flutter era antigo (Dart 3.3.4) e o app exige
+    Dart 3.10 ou mais novo.
+
+O que foi feito:
+  - Instalado o Flutter 3.50.0 (estavel, Dart 3.14) em
+    C:\Users\Leonardo_volpi150\flutter (pasta do proprio usuario, sem o
+    problema de dono). Arquivo baixado do site oficial e assinatura
+    SHA-256 conferida.
+  - O C:\flutter antigo continua la, sem alteracao.
+  - Colocado C:\Users\Leonardo_volpi150\flutter\bin no inicio do PATH do
+    usuario do Windows (so a conta do usuario, nao a do sistema).
+  - Resultado: as mudancas da agenda elastica no app nao tem erro nem
+    aviso, e os 48 testes do Flutter passam.
+  - O pubspec.lock foi atualizado pelo Flutter novo e enviado ao GitHub.
+
+Instrucoes (para usar o Flutter novo):
+  1. Fechar e abrir o VS Code de novo (terminais abertos antes nao
+     enxergam o PATH novo).
+  2. Num terminal novo, rodar:  flutter --version
+     Deve mostrar "Flutter 3.50.0".
+  3. Se a extensao do Flutter no VS Code continuar usando o SDK antigo:
+     Ctrl+Shift+P -> "Flutter: Change SDK" -> escolher
+     C:\Users\Leonardo_volpi150\flutter
+  4. Para conferir o app:  dentro de mobile/, rodar
+     flutter analyze   e   flutter test
+
+Observacao:
+  - O flutter analyze ainda mostra avisos informativos (nao sao erros) em
+    codigo que ja existia: o Flutter 3.50 marcou como obsoleto o
+    "package:flutter/material.dart" e pede "package:material_ui" no lugar.
+    O app funciona normalmente; a migracao pode ser feita depois.
