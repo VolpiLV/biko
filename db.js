@@ -93,6 +93,15 @@ CREATE TABLE IF NOT EXISTS user_photos (
 );
 `);
 
+// Migração da "agenda elástica": o pedido guarda quando o atendimento começou de verdade,
+// o fim planejado original, quantos minutos o prestador prorrogou e quanto este pedido foi
+// empurrado por atraso do atendimento anterior. end_ts continua sendo o fim EFETIVO (usado nos conflitos).
+const orderCols = db.prepare('PRAGMA table_info(orders)').all().map((c) => c.name);
+if (!orderCols.includes('started_ts')) db.exec('ALTER TABLE orders ADD COLUMN started_ts INTEGER');
+if (!orderCols.includes('planned_end_ts')) db.exec('ALTER TABLE orders ADD COLUMN planned_end_ts INTEGER');
+if (!orderCols.includes('extended_min')) db.exec('ALTER TABLE orders ADD COLUMN extended_min INTEGER NOT NULL DEFAULT 0');
+if (!orderCols.includes('delay_min')) db.exec('ALTER TABLE orders ADD COLUMN delay_min INTEGER NOT NULL DEFAULT 0');
+
 // ---- hash de senha (scrypt + salt aleatório) ----
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');

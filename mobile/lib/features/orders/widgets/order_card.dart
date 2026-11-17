@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_tokens.dart';
+import '../../../core/theme/biko_colors.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/order_model.dart';
 import '../../../data/models/user_role.dart';
@@ -47,7 +48,8 @@ class OrderCard extends StatelessWidget {
                         const SizedBox(width: 4),
                         Flexible(
                           child: Text(
-                            '${Fmt.dateBR(order.date)} · ${order.time}–${order.endTime}',
+                            '${Fmt.dateBR(order.date)} · ${order.time}–${order.endTime}'
+                            '${order.delayMin > 0 ? ' (remarcado +${order.delayMin} min)' : ''}',
                             style: theme.textTheme.bodySmall,
                           ),
                         ),
@@ -60,7 +62,14 @@ class OrderCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  StatusBadge(status: order.status),
+                  if (order.inProgress)
+                    Pill(
+                      label: 'Em andamento',
+                      background: context.bikoColors.highlight,
+                      foreground: context.bikoColors.onHighlight,
+                    )
+                  else
+                    StatusBadge(status: order.status),
                   const SizedBox(height: AppSpacing.sm),
                   Text(Fmt.brl(order.price), style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
                 ],

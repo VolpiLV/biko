@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_tokens.dart';
+import '../../../core/theme/biko_colors.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/order_model.dart';
 import '../../../data/remote/order_service.dart';
@@ -39,6 +40,10 @@ class _OrderDetailState extends State<_OrderDetail> {
   OrderAction? _pending;
   String? _reasonError;
 
+  /// Minutos a mais escolhidos em "Preciso de mais tempo".
+  int _extraMin = 15;
+  static const _extraSteps = [15, 30, 45, 60];
+
   @override
   void dispose() {
     _reason.dispose();
@@ -60,14 +65,18 @@ class _OrderDetailState extends State<_OrderDetail> {
       setState(() => _reasonError = 'Informe o motivo (mín. 3 caracteres).');
       return;
     }
-    final ok = await vm.run(action, reason: reason);
+    final ok = await vm.run(
+      action,
+      reason: reason,
+      minutes: action == OrderAction.estender ? _extraMin : null,
+    );
     if (!mounted) return;
     if (ok) {
       final messenger = ScaffoldMessenger.of(context);
       Navigator.of(context).pop(true);
       messenger.showSnackBar(SnackBar(content: Text(action.doneMessage)));
     } else {
-      final fieldError = vm.fieldError('reason');
+      final fieldError = vm.fieldError('reason') ?? vm.fieldError('minutes');
       if (fieldError != null && _pending != null) {
         setState(() => _reasonError = fieldError);
       } else if (vm.errorMessage case final msg?) {
@@ -95,12 +104,45 @@ class _OrderDetailState extends State<_OrderDetail> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SheetHeader(title: order.serviceTitle, trailing: StatusBadge(status: order.status)),
+        SheetHeader(
+          title: order.serviceTitle,
+          trailing: order.inProgress
+              ? Pill(
+                  label: 'Em andamento',
+                  background: context.bikoColors.highlight,
+                  foreground: context.bikoColors.onHighlight,
+                )
+              : StatusBadge(status: order.status),
+        ),
         InfoRow(
           label: 'Quando',
           value: '${Fmt.dateBR(order.date)} · ${order.time}–${order.endTime}',
           extra: Fmt.duration(order.durationMin),
         ),
+        if (order.delayMin > 0)
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.tertiaryContainer,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              'Horário remarcado: era ${order.originalTime ?? '--'}, agora ${order.time} '
+              '(+${order.delayMin} min por imprevisto no atendimento anterior).'
+              '${order.status == OrderStatus.confirmado || order.status == OrderStatus.pendente ? ' O cliente pode cancelar sem custo.' : ''}',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onTertiaryContainer),
+            ),
+          ),
+        if (order.startedTime case final started?)
+          InfoRow(
+            label: 'Início real',
+            value: started,
+            extra: order.extendedMin > 0
+                ? 'Previsto até ${order.plannedEndTime}, prorrogado +${Fmt.duration(order.extendedMin)}'
+                : null,
+          ),
+        if (order.realDurationMin case final real?) InfoRow(label: 'Tempo real', value: Fmt.duration(real)),
         InfoRow(label: 'Valor', value: Fmt.brl(order.price)),
         InfoRow(label: 'Endereço', value: order.address),
         if (order.notes case final notes? when notes.isNotEmpty) InfoRow(label: 'Observações', value: notes),
@@ -121,6 +163,28 @@ class _OrderDetailState extends State<_OrderDetail> {
         for (final event in order.history) _HistoryItem(event: event),
         const SizedBox(height: AppSpacing.md),
         if (_pending case final action?) ...[
+          if (action == OrderAction.estender) ...[
+            Text('Quanto tempo a mais?', style: theme.textTheme.titleSmall),
+            const SizedBox(height: AppSpacing.xs),
+            Wrap(
+              spacing: AppSpacing.sm,
+              children: [
+                for (final m in _extraSteps)
+                  ChoiceChip(
+                    label: Text('+$m min'),
+                    selected: _extraMin == m,
+                    onSelected: vm.loading ? null : (_) => setState(() => _extraMin = m),
+                  ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+              child: Text(
+                'Os próximos clientes afetados são remarcados automaticamente e podem cancelar sem custo.',
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ],
           TextField(
             controller: _reason,
             maxLength: 200,
@@ -131,7 +195,11 @@ class _OrderDetailState extends State<_OrderDetail> {
               if (_reasonError != null) setState(() => _reasonError = null);
             },
             decoration: InputDecoration(
-              labelText: vm.reasonRequired(action, userId) ? 'Motivo' : 'Motivo (opcional)',
+              labelText: action == OrderAction.estender
+                  ? 'O que aconteceu? (ex.: acabou a energia)'
+                  : vm.reasonRequired(action, userId)
+                      ? 'Motivo'
+                      : 'Motivo (opcional)',
               errorText: _reasonError,
             ),
           ),
@@ -193,7 +261,7 @@ class _HistoryItem extends StatelessWidget {
                 Text.rich(
                   TextSpan(
                     children: [
-                      TextSpan(text: event.status.label, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      TextSpan(text: event.label, style: const TextStyle(fontWeight: FontWeight.w700)),
                       TextSpan(text: '  ${Fmt.dateTime(event.createdAt)}', style: theme.textTheme.bodySmall),
                     ],
                   ),

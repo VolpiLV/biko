@@ -25,6 +25,8 @@ enum OrderStatus {
 enum OrderAction {
   confirmar('confirmar', 'Confirmar pedido', 'Pedido confirmado.'),
   recusar('recusar', 'Recusar', 'Pedido recusado.'),
+  iniciar('iniciar', 'Iniciar atendimento', 'Atendimento iniciado.'),
+  estender('estender', 'Preciso de mais tempo', 'Tempo prorrogado. A agenda foi ajustada.'),
   concluir('concluir', 'Marcar como concluído', 'Pedido concluído.'),
   cancelar('cancelar', 'Cancelar pedido', 'Pedido cancelado.');
 
@@ -61,17 +63,33 @@ class OrderParty {
       );
 }
 
+/// Rótulo de um item do histórico: status do pedido ou evento da agenda elástica.
+String orderEventLabel(String kind) {
+  const extra = {
+    'iniciado': 'Atendimento iniciado',
+    'prorrogado': 'Tempo prorrogado',
+    'remarcado': 'Horário remarcado',
+  };
+  for (final s in OrderStatus.values) {
+    if (s.apiValue == kind) return s.label;
+  }
+  return extra[kind] ?? kind; // evento novo no backend: mostra o código em vez de quebrar
+}
+
 /// Item do histórico de mudanças de status.
 class OrderEvent {
-  const OrderEvent({required this.status, required this.createdAt, this.note, this.actorName});
+  const OrderEvent({required this.kind, required this.createdAt, this.note, this.actorName});
 
-  final OrderStatus status;
+  /// "pendente", "confirmado"... ou "iniciado", "prorrogado", "remarcado".
+  final String kind;
+
+  String get label => orderEventLabel(kind);
   final DateTime createdAt;
   final String? note;
   final String? actorName;
 
   factory OrderEvent.fromJson(Map<String, dynamic> json) => OrderEvent(
-        status: OrderStatus.fromApi(json['status']),
+        kind: readString(json, 'status'),
         createdAt: DateTime.fromMillisecondsSinceEpoch(readInt(json, 'created_at')),
         note: readStringOrNull(json, 'note'),
         actorName: readStringOrNull(json, 'actor_name'),
@@ -97,6 +115,13 @@ class OrderModel {
     this.notes,
     this.statusReason,
     this.history = const [],
+    this.inProgress = false,
+    this.startedTime,
+    this.plannedEndTime,
+    this.extendedMin = 0,
+    this.delayMin = 0,
+    this.originalTime,
+    this.realDurationMin,
   });
 
   final int id;
@@ -122,6 +147,20 @@ class OrderModel {
   /// Só vem preenchido em GET /api/orders/:id.
   final List<OrderEvent> history;
 
+  // ---- agenda elástica ----
+  /// Prestador já apertou "Iniciar atendimento" e ainda não concluiu.
+  final bool inProgress;
+  final String? startedTime;
+  final String? plannedEndTime;
+
+  /// Minutos que o prestador prorrogou (imprevisto).
+  final int extendedMin;
+
+  /// Minutos que este pedido foi empurrado por atraso do atendimento anterior.
+  final int delayMin;
+  final String? originalTime;
+  final int? realDurationMin;
+
   factory OrderModel.fromJson(Map<String, dynamic> json) {
     final rawActions = json['actions'];
     return OrderModel(
@@ -144,6 +183,13 @@ class OrderModel {
           for (final a in rawActions) ?OrderAction.fromApi(a),
       ],
       history: json['history'] is List ? readList(json, 'history', OrderEvent.fromJson) : const [],
+      inProgress: json['in_progress'] == true,
+      startedTime: readStringOrNull(json, 'started_time'),
+      plannedEndTime: readStringOrNull(json, 'planned_end_time'),
+      extendedMin: readNumOrNull(json, 'extended_min')?.round() ?? 0,
+      delayMin: readNumOrNull(json, 'delay_min')?.round() ?? 0,
+      originalTime: readStringOrNull(json, 'original_time'),
+      realDurationMin: readNumOrNull(json, 'real_duration_min')?.round(),
     );
   }
 }

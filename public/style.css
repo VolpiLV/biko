@@ -224,3 +224,18 @@ textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-sof
 .dot.st-concluido { background: var(--ok); }
 .dot.st-recusado, .dot.st-cancelado { background: var(--danger); }
 .toolbar input[type=number], .toolbar input[type=search] { width: 100%; }
+
+/* agenda elástica */
+.badge.st-andamento { background: #fff1e0; color: #b9620a; }
+.dot.st-iniciado, .dot.st-prorrogado, .dot.st-remarcado { background: #e8892b; }
+.warn { color: #b9620a; }
+.ok { color: var(--ok); }
+.notice { margin: 8px 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.4; }
+.notice.warn { background: #fff6dd; color: #8a5a00; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.chip input { position: absolute; opacity: 0; pointer-events: none; }
+.chip span { display: inline-block; padding: 6px 12px; border-radius: 999px; border: 1px solid #d6dbe6; font-size: 13px; cursor: pointer; }
+.chip input:checked + span { background: var(--blue); border-color: var(--blue); color: #fff; }
+.chip input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
+.hint { display: block; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.real-stats { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.4; }

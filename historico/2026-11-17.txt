@@ -4,3 +4,62 @@ HISTORICO DE PENSAMENTOS - 17/11/2026
 - Criada a pasta "historico" para guardar o historico das conversas e
   raciocinios sobre o projeto biko.
 - Cada arquivo = um dia de conversa (nome no formato AAAA-MM-DD.txt).
+
+-------------------------------------------------------------------------
+PROBLEMA: TEMPO DO SERVICO x IMPREVISTOS
+-------------------------------------------------------------------------
+
+O que foi pedido (texto do Leonardo):
+  "nesta situação vou pegar o exemplo da atividade "limpesa de fogao"
+  cadastrada pelo prestador "Carlos" no tempo de 30 minutos. Porem a
+  atividade na verdade demorou 45 minutos pois acabou a energia no meio do
+  processo e impediu que ele termine no tempo cadastrado pelo prestador.
+  a ideia de resolução e o operador cadastrar mais tempo contando com estes
+  imprevistos mas caso ele por algum motivo acabe conseguindo terminar o
+  serviço antes do tempo acaba perdendo clientes por conta deste tempo sem
+  pedidos entende. pode alterar o projeto com a melhor solução que exista
+  para esse paradigma"
+
+Raciocinio:
+  - O problema e que a duracao era FIXA. Qualquer numero fixo erra:
+    curto demais -> o atraso atropela o proximo cliente;
+    longo demais (com "gordura") -> horario vazio e clientes perdidos.
+  - Imprevisto e a excecao, nao a regra. Entao nao faz sentido todo
+    atendimento "pagar" por ele com tempo reservado a mais.
+  - A melhor saida (a mesma ideia de apps de servico/entrega) e uma
+    AGENDA ELASTICA: cadastra-se o tempo normal e a agenda se ajusta
+    ao que acontece de verdade durante o atendimento.
+
+Solucao adotada:
+  1. Duracao sem gordura: o Carlos cadastra 30 min (o tempo normal).
+  2. "Iniciar atendimento": o prestador marca quando comecou de verdade
+     (a partir de 30 min antes do horario). Se comecar atrasado, o tempo
+     conta a partir do inicio real.
+  3. "Preciso de mais tempo": no meio do servico (ex.: acabou a energia),
+     ele pede +15/30/45/60 min e informa o motivo. No exemplo: +15 min.
+     - Os proximos pedidos dele que forem atingidos sao remarcados
+       automaticamente, em cascata. Se houver um intervalo livre depois,
+       ele absorve o atraso e ninguem mais e afetado.
+     - O cliente remarcado ve o horario antigo e o novo, e pode cancelar
+       sem custo (sem a regra das 2 horas).
+     - Limites: no maximo 4 h a mais e nunca depois das 22:00.
+  4. Terminou antes: ao "Concluir", o resto do horario e liberado na
+     agenda na mesma hora, e outros clientes podem agendar.
+  5. Aprendizado: o sistema mede o tempo real (iniciar -> concluir) de
+     cada servico. Na aba Servicos mostra o "tempo real tipico" (mediana)
+     e, depois de 3 atendimentos, sugere a duracao ideal. Usamos a mediana
+     e nao a media de proposito: um dia com falta de energia nao deve
+     inflar a duracao de todos os outros dias.
+  6. Tudo fica no historico do pedido: iniciado, prorrogado e remarcado.
+
+Exemplo do Carlos com a solucao:
+  09:00-09:30 Limpeza de fogao (Maria)   -> acabou a energia, +15 min
+  09:30-10:30 proximo cliente (Clara)    -> remarcado para 09:45-10:45,
+                                            com aviso e cancelamento livre
+  11:00 outro cliente                    -> nao muda (o intervalo absorveu)
+  Em um dia normal ele termina em 30 min e nao perde nenhum horario.
+
+Onde mudou: servidor, tela web e app Flutter (detalhes no README, secao
+"Agenda elastica"). Foram criados testes novos e todos os 98 passam.
+Pendente: rodar "flutter analyze" (o Flutter nao estava no PATH do
+terminal usado nesta conversa).

@@ -44,12 +44,13 @@ class OrderService {
         },
       );
 
-  Future<OrderModel> changeStatus(int id, OrderAction action, {String? reason}) => _api.post(
+  Future<OrderModel> changeStatus(int id, OrderAction action, {String? reason, int? minutes}) => _api.post(
         '/api/orders/$id/status',
         (json) => OrderModel.fromJson(readMap(json, 'order')),
         body: {
           'action': action.apiValue,
           if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+          if (minutes != null) 'minutes': minutes,
         },
       );
 

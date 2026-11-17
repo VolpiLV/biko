@@ -90,6 +90,13 @@ class _ServicesTabState extends State<ServicesTab> {
                         Text(s.category),
                         Text('· ${Fmt.brl(s.price)} · ${Fmt.duration(s.durationMin)}'),
                         Pill.active(context, active: s.active),
+                        if (s.realStats case final r? when r.count > 0 && r.medianMin != null)
+                          Text(
+                            'Tempo real típico: ${Fmt.duration(r.medianMin!)} (${r.count} atendimento(s)'
+                            '${r.extendedCount > 0 ? ' · ${r.extendedCount} com mais tempo' : ''})'
+                            '${r.suggestedMin != null && r.suggestedMin != s.durationMin ? ' · Sugestão: ${Fmt.duration(r.suggestedMin!)}' : ''}',
+                            style: theme.textTheme.bodySmall,
+                          ),
                       ],
                     ),
                   ),

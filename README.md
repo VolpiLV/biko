@@ -24,7 +24,7 @@ Abra http://localhost:3000. O banco `biko.db` é criado sozinho na primeira vez,
 
 Para zerar tudo, pare o servidor e apague os arquivos `biko.db*`.
 
-Testes automatizados do backend (80 testes, usam um banco temporário e não mexem no `biko.db`):
+Testes automatizados do backend (98 testes, usam um banco temporário e não mexem no `biko.db`):
 
 ```bash
 node --disable-warning=ExperimentalWarning test.js
@@ -79,6 +79,21 @@ O prestador cadastra seus **serviços** (aba *Serviços*: título, categoria, de
 | confirmado    | concluir   | prestador do pedido          | concluído   | só depois do horário agendado |
 | pendente / confirmado | cancelar | cliente, prestador ou admin | cancelado | prestador/admin: motivo obrigatório; cliente: opcional, e pedido **confirmado** só até 2 h antes |
 
+**Agenda elástica (imprevistos no atendimento)**
+
+A duração cadastrada no serviço é o tempo **normal**, sem "gordura". Os imprevistos são tratados durante o atendimento:
+
+| Ação | Quem | Regras |
+|------|------|--------|
+| iniciar | prestador | pedido confirmado, a partir de 30 min antes do horário; só um atendimento em andamento por vez. Se começar atrasado, o tempo do serviço conta a partir do início real |
+| estender ("Preciso de mais tempo") | prestador | só com o atendimento iniciado; +15, 30, 45 ou 60 min; motivo obrigatório; no máximo 4 h a mais e nunca depois das 22:00 |
+| concluir | prestador | pode concluir antes do fim previsto se já iniciou; o restante do horário é liberado na agenda na hora |
+
+- Quando o atendimento passa do horário, os próximos pedidos do prestador que se sobrepõem são **remarcados em cascata** (arredondado para 5 min). Um intervalo livre entre pedidos absorve o atraso e a cascata para ali.
+- O cliente remarcado vê o horário antigo e o novo e pode **cancelar sem a regra das 2 h**.
+- Na aba *Serviços* aparece o **tempo real típico** (mediana dos últimos 20 atendimentos) e, a partir de 3 atendimentos, a sugestão de duração.
+- Os eventos `iniciado`, `prorrogado` e `remarcado` aparecem no histórico do pedido.
+
 - Pedido recusado, concluído ou cancelado é final: qualquer nova ação dá `409`.
 - Quem não participa do pedido recebe `404` (como se não existisse); o admin vê todos.
 - O telefone da outra parte só aparece depois que o pedido é confirmado.
@@ -101,7 +116,7 @@ Aba *Buscar* do cliente. Procura nos serviços ativos de prestadores ativos:
 biko/
 ├── server.js        # servidor HTTP + rotas da API + regras de acesso e de negócio
 ├── db.js            # SQLite (node:sqlite): tabelas, migração, hash de senha, dados de exemplo
-├── test.js          # testes automatizados do backend (80)
+├── test.js          # testes automatizados do backend (98)
 └── public/
     ├── index.html
     ├── style.css

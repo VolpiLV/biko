@@ -43,6 +43,7 @@ class ServiceModel {
     required this.durationMin,
     required this.active,
     this.providerPhotoUrl,
+    this.realStats,
   });
 
   final int id;
@@ -56,6 +57,9 @@ class ServiceModel {
   final int durationMin;
   final bool active;
 
+  /// Só vem em /api/services/mine: tempo real medido nos atendimentos concluídos.
+  final ServiceRealStats? realStats;
+
   factory ServiceModel.fromJson(Map<String, dynamic> json) => ServiceModel(
         id: readInt(json, 'id'),
         providerId: readInt(json, 'provider_id'),
@@ -67,6 +71,29 @@ class ServiceModel {
         price: readNum(json, 'price'),
         durationMin: readInt(json, 'duration_min'),
         active: readBool(json, 'active'),
+        realStats: json['real_stats'] is Map<String, dynamic>
+            ? ServiceRealStats.fromJson(json['real_stats'] as Map<String, dynamic>)
+            : null,
+      );
+}
+
+/// Tempo real de um serviço (iniciar -> concluir). A sugestão é a mediana arredondada
+/// para 15 min: o tempo típico, sem gordura (imprevistos ficam com "Preciso de mais tempo").
+class ServiceRealStats {
+  const ServiceRealStats({required this.count, this.medianMin, this.extendedCount = 0, this.suggestedMin});
+
+  final int count;
+  final int? medianMin;
+  final int extendedCount;
+
+  /// null quando ainda há poucos atendimentos (menos de 3).
+  final int? suggestedMin;
+
+  factory ServiceRealStats.fromJson(Map<String, dynamic> json) => ServiceRealStats(
+        count: readNumOrNull(json, 'count')?.round() ?? 0,
+        medianMin: readNumOrNull(json, 'median_min')?.round(),
+        extendedCount: readNumOrNull(json, 'extended_count')?.round() ?? 0,
+        suggestedMin: readNumOrNull(json, 'suggested_min')?.round(),
       );
 }
 

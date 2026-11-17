@@ -247,7 +247,10 @@ const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDat
 const toMin = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 const STATUS_LABEL = { pendente: 'Pendente', confirmado: 'Confirmado', recusado: 'Recusado', concluido: 'Concluído', cancelado: 'Cancelado' };
 const CAT_ICON = { 'Telhado & Reparador': '🏠', Encanador: '🔧', Eletricista: '⚡', Pintor: '🎨', Limpeza: '🧹', Jardinagem: '🌿' };
-const ACTION_LABEL = { confirmar: 'Confirmar pedido', recusar: 'Recusar', concluir: 'Marcar como concluído', cancelar: 'Cancelar pedido' };
+const ACTION_LABEL = { confirmar: 'Confirmar pedido', recusar: 'Recusar', iniciar: 'Iniciar atendimento', estender: 'Preciso de mais tempo', concluir: 'Marcar como concluído', cancelar: 'Cancelar pedido' };
+const ACTION_DONE = { confirmar: 'Pedido confirmado.', recusar: 'Pedido recusado.', iniciar: 'Atendimento iniciado.', estender: 'Tempo prorrogado. A agenda foi ajustada.', concluir: 'Pedido concluído.', cancelar: 'Pedido cancelado.' };
+// Eventos do histórico que não são status (agenda elástica)
+const EVENT_LABEL = { ...STATUS_LABEL, iniciado: 'Atendimento iniciado', prorrogado: 'Tempo prorrogado', remarcado: 'Horário remarcado' };
 const OPEN_MIN = 7 * 60, CLOSE_MIN = 20 * 60; // mesmo horário de atendimento do backend
 
 // Avatar: foto (se houver) ou iniciais do nome
@@ -499,8 +502,8 @@ function counterpart(o) {
 function orderCard(o) {
   return `<div class="card-item order" data-order="${o.id}" role="button" tabindex="0">
     <div class="info"><b>${esc(o.service_title)}</b><small>${esc(counterpart(o))}</small>
-      <small>📅 ${dateBR(o.date)} · ${o.time}–${o.end_time}</small></div>
-    <div class="right"><span class="badge st-${o.status}">${STATUS_LABEL[o.status]}</span><b>${brl(o.price)}</b></div></div>`;
+      <small>📅 ${dateBR(o.date)} · ${o.time}–${o.end_time}${o.delay_min ? ` <span class="warn">(remarcado +${o.delay_min} min)</span>` : ''}</small></div>
+    <div class="right"><span class="badge st-${o.in_progress ? 'andamento' : o.status}">${o.in_progress ? 'Em andamento' : STATUS_LABEL[o.status]}</span><b>${brl(o.price)}</b></div></div>`;
 }
 
 async function ordersHtml() {
@@ -550,21 +553,30 @@ async function orderModal(id) {
   ov.className = 'overlay';
   const person = (label, p) => `<div class="kv"><span>${label}</span><b>${esc(p.name)}${p.phone ? `<br><small>${esc(p.phone)}</small>` : ''}</b></div>`;
   ov.innerHTML = `<div class="sheet">
-    <div class="row-between"><h3>${esc(o.service_title)}</h3><span class="badge st-${o.status}">${STATUS_LABEL[o.status]}</span></div>
+    <div class="row-between"><h3>${esc(o.service_title)}</h3><span class="badge st-${o.in_progress ? 'andamento' : o.status}">${o.in_progress ? 'Em andamento' : STATUS_LABEL[o.status]}</span></div>
     <div class="kv"><span>Quando</span><b>${dateBR(o.date)} · ${o.time}–${o.end_time} (${fmtDur(o.duration_min)})</b></div>
+    ${o.delay_min ? `<div class="notice warn">⏰ Horário remarcado: era ${o.original_time}, agora ${o.time} (+${o.delay_min} min por imprevisto no atendimento anterior).${o.status === 'confirmado' || o.status === 'pendente' ? ' O cliente pode cancelar sem custo.' : ''}</div>` : ''}
+    ${o.started_time ? `<div class="kv"><span>Início real</span><b>${o.started_time}${o.extended_min ? ` · previsto até ${o.planned_end_time}, prorrogado +${fmtDur(o.extended_min)}` : ''}</b></div>` : ''}
+    ${o.real_duration_min ? `<div class="kv"><span>Tempo real</span><b>${fmtDur(o.real_duration_min)}</b></div>` : ''}
     <div class="kv"><span>Valor</span><b>${brl(o.price)}</b></div>
     <div class="kv"><span>Endereço</span><b>${esc(o.address)}</b></div>
     ${o.notes ? `<div class="kv"><span>Observações</span><b>${esc(o.notes)}</b></div>` : ''}
     ${person('Cliente', o.client)}${person('Prestador', o.provider)}
     ${o.status_reason ? `<div class="kv"><span>Motivo</span><b>${esc(o.status_reason)}</b></div>` : ''}
     <h4 class="sub">Histórico</h4>
-    <ul class="timeline">${o.history.map((h) => `<li><span class="dot st-${h.status}"></span><div><b>${STATUS_LABEL[h.status]}</b> <small>${dateTimeBR(h.created_at)}</small><br><small>${esc(h.actor_name || 'Sistema')}${h.note ? ` — ${esc(h.note)}` : ''}</small></div></li>`).join('')}</ul>
+    <ul class="timeline">${o.history.map((h) => `<li><span class="dot st-${h.status}"></span><div><b>${EVENT_LABEL[h.status] || esc(h.status)}</b> <small>${dateTimeBR(h.created_at)}</small><br><small>${esc(h.actor_name || 'Sistema')}${h.note ? ` — ${esc(h.note)}` : ''}</small></div></li>`).join('')}</ul>
     <div id="reasonBox" hidden>
+      <div id="extendBox" hidden>
+        <label>Quanto tempo a mais?</label>
+        <div class="chips">${[15, 30, 45, 60].map((m, i) => `<label class="chip"><input type="radio" name="extMin" value="${m}" ${i === 0 ? 'checked' : ''}><span>+${m} min</span></label>`).join('')}</div>
+        <small class="hint">Os próximos clientes que forem afetados são remarcados automaticamente e podem cancelar sem custo.</small>
+        <div class="field-error" data-err="minutes"></div>
+      </div>
       <label for="reason" id="reasonLabel">Motivo</label><textarea id="reason" rows="2" maxlength="200"></textarea><div class="field-error" data-err="reason"></div>
       <div class="actions" style="margin-top:12px"><button type="button" class="btn secondary" id="reasonBack" style="margin:0">Voltar</button><button type="button" class="btn danger" id="reasonOk" style="margin:0">Confirmar</button></div>
     </div>
     <div id="actionBox" class="stack">
-      ${o.actions.map((a) => `<button type="button" class="btn ${a === 'confirmar' || a === 'concluir' ? '' : a === 'recusar' || a === 'cancelar' ? 'danger' : 'secondary'}" data-act="${a}" style="margin-top:10px">${ACTION_LABEL[a]}</button>`).join('')}
+      ${o.actions.map((a) => `<button type="button" class="btn ${a === 'confirmar' || a === 'concluir' || a === 'iniciar' ? '' : a === 'recusar' || a === 'cancelar' ? 'danger' : 'secondary'}" data-act="${a}" style="margin-top:10px">${ACTION_LABEL[a]}</button>`).join('')}
       <button type="button" class="btn secondary" id="closeOrder" style="margin-top:10px">Fechar</button>
     </div></div>`;
   $app.appendChild(ov);
@@ -572,26 +584,33 @@ async function orderModal(id) {
   ov.onclick = (e) => { if (e.target === ov) close(); };
   ov.querySelector('#closeOrder').onclick = close;
 
-  async function send(action, reason) {
+  async function send(action, reason, minutes) {
     try {
-      await api('POST', `/api/orders/${o.id}/status`, { action, reason });
+      await api('POST', `/api/orders/${o.id}/status`, { action, reason, minutes });
       close();
-      toast(action === 'confirmar' ? 'Pedido confirmado.' : action === 'concluir' ? 'Pedido concluído.' : action === 'recusar' ? 'Pedido recusado.' : 'Pedido cancelado.');
+      toast(ACTION_DONE[action]);
       await viewApp();
     } catch (err) {
-      const box = ov.querySelector('[data-err="reason"]');
-      if (err.fields && err.fields.reason && !ov.querySelector('#reasonBox').hidden) box.textContent = err.fields.reason;
-      else { toast(err.message, true); }
+      const inForm = !ov.querySelector('#reasonBox').hidden;
+      const f = err.fields || {};
+      if (inForm && (f.reason || f.minutes)) {
+        ov.querySelector('[data-err="reason"]').textContent = f.reason || '';
+        ov.querySelector('[data-err="minutes"]').textContent = f.minutes || '';
+        if (f.minutes && !f.reason) toast(err.message, true);
+      } else { toast(err.message, true); }
     }
   }
   ov.querySelectorAll('[data-act]').forEach((b) => (b.onclick = () => {
     const a = b.dataset.act;
-    if (a === 'recusar' || a === 'cancelar') {
-      // recusar sempre pede motivo; cancelar pede motivo (obrigatório para prestador/admin, opcional para o cliente)
+    if (a === 'recusar' || a === 'cancelar' || a === 'estender') {
+      // recusar e estender sempre pedem motivo; cancelar pede motivo (obrigatório para prestador/admin, opcional para o cliente)
       const optional = a === 'cancelar' && state.user.id === o.client.id;
-      ov.querySelector('#reasonLabel').textContent = optional ? 'Motivo (opcional)' : 'Motivo';
+      ov.querySelector('#reasonLabel').textContent = a === 'estender' ? 'O que aconteceu? (ex.: acabou a energia)' : optional ? 'Motivo (opcional)' : 'Motivo';
+      ov.querySelector('#extendBox').hidden = a !== 'estender';
+      ov.querySelector('#reasonOk').className = a === 'estender' ? 'btn' : 'btn danger';
       ov.querySelector('#reasonBox').hidden = false; ov.querySelector('#actionBox').hidden = true;
-      ov.querySelector('#reasonOk').onclick = () => send(a, ov.querySelector('#reason').value);
+      ov.querySelector('#reasonOk').onclick = () => send(a, ov.querySelector('#reason').value,
+        a === 'estender' ? Number(ov.querySelector('input[name="extMin"]:checked').value) : undefined);
       ov.querySelector('#reasonBack').onclick = () => { ov.querySelector('#reasonBox').hidden = true; ov.querySelector('#actionBox').hidden = false; };
     } else send(a);
   }));
@@ -606,9 +625,21 @@ async function servicesHtml() {
     ${state.myServices.length ? state.myServices.map((s) => `<div class="card-item svc">
       <div class="ci">${CAT_ICON[s.category] || '🛠️'}</div>
       <div class="info"><b>${esc(s.title)}</b><small>${esc(s.category)}</small>
-        <div class="meta"><span>${brl(s.price)}</span><span>⏱ ${fmtDur(s.duration_min)}</span><span class="badge ${s.active ? 'on' : 'off'}">${s.active ? 'Ativo' : 'Inativo'}</span></div></div>
+        <div class="meta"><span>${brl(s.price)}</span><span>⏱ ${fmtDur(s.duration_min)}</span><span class="badge ${s.active ? 'on' : 'off'}">${s.active ? 'Ativo' : 'Inativo'}</span></div>
+        ${realStatsHtml(s)}</div>
       <button class="link" data-editsvc="${s.id}">Editar</button></div>`).join('')
       : '<div class="empty">Você ainda não cadastrou serviços.<br>Cadastre um para aparecer na busca dos clientes.</div>'}`;
+}
+
+// Tempo real medido (iniciar -> concluir). Sugere a duração típica: imprevistos ficam por conta do "Preciso de mais tempo".
+function realStatsHtml(s) {
+  const r = s.real_stats;
+  if (!r || !r.count) return '';
+  const ext = r.extended_count ? ` · ${r.extended_count} precisou(aram) de mais tempo` : '';
+  const tip = r.suggested_min && r.suggested_min !== s.duration_min
+    ? `<br><b class="${r.suggested_min < s.duration_min ? 'ok' : 'warn'}">Sugestão: cadastrar ${fmtDur(r.suggested_min)}</b>${r.suggested_min < s.duration_min ? ' — você libera horários para mais clientes' : ''}`
+    : '';
+  return `<small class="real-stats">Tempo real típico: ${fmtDur(r.median_min)} (${r.count} atendimento(s)${ext})${tip}</small>`;
 }
 
 function bindServices() {

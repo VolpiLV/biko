@@ -634,6 +634,94 @@ async function t(name, fn) {
     assert.ok(Array.isArray(p.proximos));
   });
 
+  // ---------- AGENDA ELÁSTICA (imprevistos no atendimento) ----------
+  const mariaId = (await cliente('GET', '/api/auth/me')).data.user.id;
+  const rawOrder = (o) => Number(rawDb.prepare(`INSERT INTO orders (client_id, provider_id, service_id, service_title, category, price_cents,
+      start_ts, end_ts, address, notes, status, started_ts, completed_ts, extended_min, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(o.client ?? mariaId, o.provider ?? vaza.provider_id, o.service ?? null, o.title ?? 'Limpeza de fogão', 'Limpeza', 9000,
+      o.start, o.end, 'Rua X, 1', '', o.status ?? 'confirmado', o.started ?? null, o.completed ?? null, o.extended ?? 0, Date.now(), Date.now()).lastInsertRowid);
+  const getO = async (id) => (await prest('GET', `/api/orders/${id}`)).data.order;
+  const MIN = 60000;
+
+  await t('elástica: iniciar só a partir de 30 min antes; um atendimento por vez; concluir cedo libera o horário', async () => {
+    const t0 = Date.now();
+    const far = rawOrder({ start: t0 + 3 * 3600e3, end: t0 + 3.5 * 3600e3 });
+    const near = rawOrder({ start: t0 + 20 * MIN, end: t0 + 50 * MIN });
+    const near2 = rawOrder({ start: t0 + 25 * MIN, end: t0 + 55 * MIN, client: cliente2.id });
+    assert.ok(!(await getO(far)).actions.includes('iniciar'));
+    assert.strictEqual((await prest('POST', `/api/orders/${far}/status`, { action: 'iniciar' })).status, 400);
+    assert.strictEqual((await cliente('POST', `/api/orders/${near}/status`, { action: 'iniciar' })).status, 403);
+    assert.strictEqual((await prest('POST', `/api/orders/${near}/status`, { action: 'estender', minutes: 15, reason: 'teste' })).status, 400); // não iniciado
+    const r = await prest('POST', `/api/orders/${near}/status`, { action: 'iniciar' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.data.order.in_progress, true);
+    assert.ok(r.data.order.actions.includes('estender') && r.data.order.actions.includes('concluir') && !r.data.order.actions.includes('iniciar'));
+    assert.strictEqual((await prest('POST', `/api/orders/${near}/status`, { action: 'iniciar' })).status, 409);
+    assert.strictEqual((await prest('POST', `/api/orders/${near2}/status`, { action: 'iniciar' })).status, 409); // já tem um em andamento
+    assert.ok(!(await cliente('GET', `/api/orders/${near}`)).data.order.actions.includes('cancelar')); // já começou
+    const done = await prest('POST', `/api/orders/${near}/status`, { action: 'concluir' }); // antes do horário marcado: pode, pois iniciou
+    assert.strictEqual(done.data.order.status, 'concluido');
+    assert.ok(done.data.order.real_duration_min >= 1);
+    const h = (await getO(near)).history;
+    assert.deepStrictEqual(h.map((e) => e.status), ['iniciado', 'concluido']);
+    assert.ok(/antes do previsto/.test(h[1].note));
+    for (const id of [far, near2]) await prest('POST', `/api/orders/${id}/status`, { action: 'cancelar', reason: 'limpeza do teste' });
+  });
+
+  await t('elástica: prorrogar (acabou a energia) remarca os seguintes em cascata e o intervalo livre absorve', async () => {
+    const y = new Date(); y.setDate(y.getDate() - 1);
+    const at = (h, m) => { const d = new Date(y); d.setHours(h, m, 0, 0); return d.getTime(); };
+    const A = rawOrder({ start: at(8, 0), end: at(8, 30), started: at(8, 0) });                         // fogão, 30 min, em andamento
+    const B = rawOrder({ start: at(8, 30), end: at(9, 30), client: cliente2.id });                        // colado no A
+    const C = rawOrder({ start: at(10, 0), end: at(11, 0), client: cliente2.id, status: 'pendente' });    // 30 min de folga antes
+    const D = rawOrder({ start: at(12, 0), end: at(13, 0) });                                             // longe: não mexe
+    const ext = (minutes, reason) => prest('POST', `/api/orders/${A}/status`, { action: 'estender', minutes, reason });
+    assert.ok((await ext(15)).data.fields.reason);         // motivo obrigatório
+    assert.ok((await ext(20, 'Acabou a energia')).data.fields.minutes); // só blocos de 15
+    assert.strictEqual((await cliente('POST', `/api/orders/${A}/status`, { action: 'estender', minutes: 15, reason: 'x x x' })).status, 403);
+
+    const r1 = (await ext(15, 'Acabou a energia')).data.order;
+    assert.strictEqual(r1.end_time, '08:45');
+    assert.strictEqual(r1.planned_end_time, '08:30');
+    assert.strictEqual(r1.extended_min, 15);
+    let b = await getO(B);
+    assert.deepStrictEqual([b.time, b.end_time, b.delay_min, b.original_time], ['08:45', '09:45', 15, '08:30']);
+    assert.strictEqual((await getO(C)).time, '10:00'); // 09:45 < 10:00: a folga absorveu
+
+    await ext(30, 'Energia voltou só agora');
+    b = await getO(B);
+    const c = await getO(C), d = await getO(D);
+    assert.deepStrictEqual([b.time, b.delay_min], ['09:15', 45]);
+    assert.deepStrictEqual([c.time, c.end_time, c.delay_min], ['10:15', '11:15', 15]);
+    assert.deepStrictEqual([d.time, d.delay_min], ['12:00', 0]);
+    assert.ok(b.history.some((e) => e.status === 'remarcado' && e.actor_name === null));
+    const busy = (await cliente('GET', `/api/providers/${vaza.provider_id}/agenda?date=${ymd(y)}`)).data.busy;
+    assert.ok(busy.some((x) => x.start === '08:00' && x.end === '09:15')); // agenda pública reflete o tempo real
+
+    // remarcado por atraso: o cliente pode cancelar mesmo sem as 2 h; o pedido que não mudou continua com a regra
+    assert.ok((await cliente2.c('GET', `/api/orders/${B}`)).data.order.actions.includes('cancelar'));
+    assert.ok(!(await cliente('GET', `/api/orders/${D}`)).data.order.actions.includes('cancelar'));
+    assert.strictEqual((await cliente2.c('POST', `/api/orders/${B}/status`, { action: 'cancelar' })).data.order.status, 'cancelado');
+
+    for (let i = 0; i < 3; i++) await ext(60, 'Serviço maior que o esperado'); // 45 + 180 = 225
+    assert.strictEqual((await ext(30, 'mais um pouco')).status, 400);         // passaria de 4 h
+    assert.strictEqual((await prest('POST', `/api/orders/${A}/status`, { action: 'concluir' })).data.order.status, 'concluido');
+    for (const id of [C, D]) await prest('POST', `/api/orders/${id}/status`, { action: 'cancelar', reason: 'limpeza do teste' });
+  });
+
+  await t('elástica: sugere a duração pela mediana do tempo real (sem gordura)', async () => {
+    const s = (await prest2.c('POST', '/api/services', { ...goodService, title: 'Limpeza de fogão', category: 'Limpeza', duration_min: 60 })).data.service;
+    const stats = async () => (await prest2.c('GET', '/api/services/mine')).data.services.find((x) => x.id === s.id).real_stats;
+    assert.strictEqual((await stats()).count, 0);
+    const base = Date.now() - 10 * 24 * 3600e3;
+    for (const [i, real, extra] of [[0, 30, 0], [1, 28, 0], [2, 45, 15]]) {
+      const st = base + i * 24 * 3600e3;
+      rawOrder({ provider: prest2.id, service: s.id, start: st, end: st + 60 * MIN, started: st, completed: st + real * MIN, extended: extra, status: 'concluido' });
+    }
+    const r = await stats();
+    assert.deepStrictEqual([r.count, r.median_min, r.avg_min, r.extended_count, r.suggested_min], [3, 30, 34, 1, 30]);
+  });
+
   // ---------- TOKEN BEARER (app mobile) ----------
   const bearer = (token) => async (method, url, body) => {
     const res = await fetch(base + url, {
