@@ -1,0 +1,6 @@
+HISTORICO DE PENSAMENTOS - 17/11/2026
+=====================================
+
+- Criada a pasta "historico" para guardar o historico das conversas e
+  raciocinios sobre o projeto biko.
+- Cada arquivo = um dia de conversa (nome no formato AAAA-MM-DD.txt).
