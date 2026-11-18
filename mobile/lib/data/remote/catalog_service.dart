@@ -1,6 +1,7 @@
 import '../../core/network/api_client.dart';
 import '../../core/utils/json_reader.dart';
 import '../models/catalog_models.dart';
+import '../models/order_model.dart';
 import '../models/paged.dart';
 
 /// Categorias, busca, serviços do prestador e agenda.
@@ -14,10 +15,14 @@ class CatalogService {
         (json) => readList(json, 'categories', CategoryModel.fromJson),
       );
 
-  /// Tela inicial do cliente: categorias com a contagem de serviços.
-  Future<List<CategoryModel>> clientHome() => _api.get(
+  /// Tela inicial do cliente: categorias com a contagem de serviços e os avisos
+  /// de atraso (pedidos ativos que o prestador adiou).
+  Future<({List<CategoryModel> categories, List<OrderModel> notices})> clientHome() => _api.get(
         '/api/cliente/home',
-        (json) => readList(json, 'categorias', CategoryModel.fromJson),
+        (json) => (
+          categories: readList(json, 'categorias', CategoryModel.fromJson),
+          notices: json['avisos'] is List ? readList(json, 'avisos', OrderModel.fromJson) : <OrderModel>[],
+        ),
       );
 
   Future<Paged<ServiceModel>> search(SearchFilters filters, {int offset = 0}) => _api.get(

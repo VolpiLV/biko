@@ -247,10 +247,10 @@ const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDat
 const toMin = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 const STATUS_LABEL = { pendente: 'Pendente', confirmado: 'Confirmado', recusado: 'Recusado', concluido: 'Concluído', cancelado: 'Cancelado' };
 const CAT_ICON = { 'Telhado & Reparador': '🏠', Encanador: '🔧', Eletricista: '⚡', Pintor: '🎨', Limpeza: '🧹', Jardinagem: '🌿' };
-const ACTION_LABEL = { confirmar: 'Confirmar pedido', recusar: 'Recusar', iniciar: 'Iniciar atendimento', estender: 'Preciso de mais tempo', concluir: 'Marcar como concluído', cancelar: 'Cancelar pedido' };
-const ACTION_DONE = { confirmar: 'Pedido confirmado.', recusar: 'Pedido recusado.', iniciar: 'Atendimento iniciado.', estender: 'Tempo prorrogado. A agenda foi ajustada.', concluir: 'Pedido concluído.', cancelar: 'Pedido cancelado.' };
+const ACTION_LABEL = { confirmar: 'Confirmar pedido', recusar: 'Recusar', atrasar: 'Avisar atraso / imprevisto', iniciar: 'Iniciar atendimento', estender: 'Preciso de mais tempo', concluir: 'Marcar como concluído', cancelar: 'Cancelar pedido' };
+const ACTION_DONE = { confirmar: 'Pedido confirmado.', recusar: 'Pedido recusado.', atrasar: 'Cliente avisado. O horário foi adiado.', iniciar: 'Atendimento iniciado.', estender: 'Tempo prorrogado. A agenda foi ajustada.', concluir: 'Pedido concluído.', cancelar: 'Pedido cancelado.' };
 // Eventos do histórico que não são status (agenda elástica)
-const EVENT_LABEL = { ...STATUS_LABEL, iniciado: 'Atendimento iniciado', prorrogado: 'Tempo prorrogado', remarcado: 'Horário remarcado' };
+const EVENT_LABEL = { ...STATUS_LABEL, atrasado: 'Aviso de atraso', iniciado: 'Atendimento iniciado', prorrogado: 'Tempo prorrogado', remarcado: 'Horário remarcado' };
 const OPEN_MIN = 7 * 60, CLOSE_MIN = 20 * 60; // mesmo horário de atendimento do backend
 
 // Avatar: foto (se houver) ou iniciais do nome
@@ -342,7 +342,8 @@ async function homeHtml() {
       <div class="empty">Use a aba <b>Usuários</b> para gerenciar contas e a aba <b>Pedidos</b> para acompanhar os agendamentos.</div>`;
   }
   const d = await api('GET', '/api/cliente/home');
-  return `<div class="promo" id="promo" role="button" tabindex="0"><b>Precisa de um profissional?</b><small>Encontre prestadores disponíveis e agende em poucos toques.</small></div>
+  const avisos = (d.avisos || []).map((o) => `<div class="notice warn" style="margin-bottom:10px">⏰ <b>${esc(o.provider.name)} avisou um atraso</b> em "${esc(o.service_title)}": ${dateBR(o.date)}, era ${o.original_time} e agora é <b>${o.time}</b>.<br>Motivo: ${esc(o.delay_reason)}.</div>${orderCard(o)}`).join('');
+  return `${avisos ? `<div class="section-title"><span>Avisos</span></div>${avisos}` : ''}<div class="promo" id="promo" role="button" tabindex="0"><b>Precisa de um profissional?</b><small>Encontre prestadores disponíveis e agende em poucos toques.</small></div>
     <div class="section-title"><span>Categorias populares</span></div>
     ${d.categorias.map((c) => `<div class="cat" data-cat="${esc(c.nome)}" role="button" tabindex="0"><div class="ci">${CAT_ICON[c.nome] || '🛠️'}</div><div style="flex:1"><b>${esc(c.nome)}</b><small>${esc(c.desc)}</small></div><small>${c.total} serviço(s)</small></div>`).join('')}`;
 }
@@ -502,7 +503,7 @@ function counterpart(o) {
 function orderCard(o) {
   return `<div class="card-item order" data-order="${o.id}" role="button" tabindex="0">
     <div class="info"><b>${esc(o.service_title)}</b><small>${esc(counterpart(o))}</small>
-      <small>📅 ${dateBR(o.date)} · ${o.time}–${o.end_time}${o.delay_min ? ` <span class="warn">(remarcado +${o.delay_min} min)</span>` : ''}</small></div>
+      <small>📅 ${dateBR(o.date)} · ${o.time}–${o.end_time}${o.delay_min ? ` <span class="warn">(⏰ atraso +${o.delay_min} min)</span>` : ''}</small></div>
     <div class="right"><span class="badge st-${o.in_progress ? 'andamento' : o.status}">${o.in_progress ? 'Em andamento' : STATUS_LABEL[o.status]}</span><b>${brl(o.price)}</b></div></div>`;
 }
 
@@ -555,7 +556,7 @@ async function orderModal(id) {
   ov.innerHTML = `<div class="sheet">
     <div class="row-between"><h3>${esc(o.service_title)}</h3><span class="badge st-${o.in_progress ? 'andamento' : o.status}">${o.in_progress ? 'Em andamento' : STATUS_LABEL[o.status]}</span></div>
     <div class="kv"><span>Quando</span><b>${dateBR(o.date)} · ${o.time}–${o.end_time} (${fmtDur(o.duration_min)})</b></div>
-    ${o.delay_min ? `<div class="notice warn">⏰ Horário remarcado: era ${o.original_time}, agora ${o.time} (+${o.delay_min} min por imprevisto no atendimento anterior).${o.status === 'confirmado' || o.status === 'pendente' ? ' O cliente pode cancelar sem custo.' : ''}</div>` : ''}
+    ${o.delay_min ? `<div class="notice warn">⏰ <b>Aviso de atraso:</b> o horário era ${o.original_time} e agora é ${o.time} (+${o.delay_min} min).<br>Motivo: ${esc(o.delay_reason)}.${o.status === 'confirmado' || o.status === 'pendente' ? ' O cliente pode cancelar sem custo.' : ''}</div>` : ''}
     ${o.started_time ? `<div class="kv"><span>Início real</span><b>${o.started_time}${o.extended_min ? ` · previsto até ${o.planned_end_time}, prorrogado +${fmtDur(o.extended_min)}` : ''}</b></div>` : ''}
     ${o.real_duration_min ? `<div class="kv"><span>Tempo real</span><b>${fmtDur(o.real_duration_min)}</b></div>` : ''}
     <div class="kv"><span>Valor</span><b>${brl(o.price)}</b></div>
@@ -567,9 +568,9 @@ async function orderModal(id) {
     <ul class="timeline">${o.history.map((h) => `<li><span class="dot st-${h.status}"></span><div><b>${EVENT_LABEL[h.status] || esc(h.status)}</b> <small>${dateTimeBR(h.created_at)}</small><br><small>${esc(h.actor_name || 'Sistema')}${h.note ? ` — ${esc(h.note)}` : ''}</small></div></li>`).join('')}</ul>
     <div id="reasonBox" hidden>
       <div id="extendBox" hidden>
-        <label>Quanto tempo a mais?</label>
+        <label id="extendLabel">Quanto tempo a mais?</label>
         <div class="chips">${[15, 30, 45, 60].map((m, i) => `<label class="chip"><input type="radio" name="extMin" value="${m}" ${i === 0 ? 'checked' : ''}><span>+${m} min</span></label>`).join('')}</div>
-        <small class="hint">Os próximos clientes que forem afetados são remarcados automaticamente e podem cancelar sem custo.</small>
+        <small class="hint" id="extendHint">Os próximos clientes que forem afetados são remarcados automaticamente e podem cancelar sem custo.</small>
         <div class="field-error" data-err="minutes"></div>
       </div>
       <label for="reason" id="reasonLabel">Motivo</label><textarea id="reason" rows="2" maxlength="200"></textarea><div class="field-error" data-err="reason"></div>
@@ -602,15 +603,20 @@ async function orderModal(id) {
   }
   ov.querySelectorAll('[data-act]').forEach((b) => (b.onclick = () => {
     const a = b.dataset.act;
-    if (a === 'recusar' || a === 'cancelar' || a === 'estender') {
-      // recusar e estender sempre pedem motivo; cancelar pede motivo (obrigatório para prestador/admin, opcional para o cliente)
+    if (a === 'recusar' || a === 'cancelar' || a === 'estender' || a === 'atrasar') {
+      // recusar, estender e atrasar sempre pedem motivo; cancelar pede motivo (obrigatório para prestador/admin, opcional para o cliente)
       const optional = a === 'cancelar' && state.user.id === o.client.id;
-      ov.querySelector('#reasonLabel').textContent = a === 'estender' ? 'O que aconteceu? (ex.: acabou a energia)' : optional ? 'Motivo (opcional)' : 'Motivo';
-      ov.querySelector('#extendBox').hidden = a !== 'estender';
-      ov.querySelector('#reasonOk').className = a === 'estender' ? 'btn' : 'btn danger';
+      const timed = a === 'estender' || a === 'atrasar';
+      ov.querySelector('#reasonLabel').textContent = timed ? 'O que aconteceu? (ex.: acabou a energia, equipamento quebrado)' : optional ? 'Motivo (opcional)' : 'Motivo';
+      ov.querySelector('#extendBox').hidden = !timed;
+      ov.querySelector('#extendLabel').textContent = a === 'atrasar' ? `Quanto vai atrasar? (hoje o horário é ${o.time})` : 'Quanto tempo a mais?';
+      ov.querySelector('#extendHint').textContent = a === 'atrasar'
+        ? 'O cliente vê o aviso com o motivo e o novo horário, e pode cancelar sem custo. Os próximos clientes afetados também são remarcados.'
+        : 'Os próximos clientes que forem afetados são remarcados automaticamente e podem cancelar sem custo.';
+      ov.querySelector('#reasonOk').className = timed ? 'btn' : 'btn danger';
       ov.querySelector('#reasonBox').hidden = false; ov.querySelector('#actionBox').hidden = true;
       ov.querySelector('#reasonOk').onclick = () => send(a, ov.querySelector('#reason').value,
-        a === 'estender' ? Number(ov.querySelector('input[name="extMin"]:checked').value) : undefined);
+        timed ? Number(ov.querySelector('input[name="extMin"]:checked').value) : undefined);
       ov.querySelector('#reasonBack').onclick = () => { ov.querySelector('#reasonBox').hidden = true; ov.querySelector('#actionBox').hidden = false; };
     } else send(a);
   }));

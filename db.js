@@ -101,6 +101,8 @@ if (!orderCols.includes('started_ts')) db.exec('ALTER TABLE orders ADD COLUMN st
 if (!orderCols.includes('planned_end_ts')) db.exec('ALTER TABLE orders ADD COLUMN planned_end_ts INTEGER');
 if (!orderCols.includes('extended_min')) db.exec('ALTER TABLE orders ADD COLUMN extended_min INTEGER NOT NULL DEFAULT 0');
 if (!orderCols.includes('delay_min')) db.exec('ALTER TABLE orders ADD COLUMN delay_min INTEGER NOT NULL DEFAULT 0');
+// Aviso de atraso: o último motivo que o cliente precisa ver (ex.: "Acabou a energia").
+if (!orderCols.includes('delay_reason')) db.exec('ALTER TABLE orders ADD COLUMN delay_reason TEXT');
 
 // ---- hash de senha (scrypt + salt aleatório) ----
 function hashPassword(password) {

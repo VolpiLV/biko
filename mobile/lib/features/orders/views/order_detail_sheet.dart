@@ -40,7 +40,7 @@ class _OrderDetailState extends State<_OrderDetail> {
   OrderAction? _pending;
   String? _reasonError;
 
-  /// Minutos a mais escolhidos em "Preciso de mais tempo".
+  /// Minutos escolhidos em "Preciso de mais tempo" ou "Avisar atraso".
   int _extraMin = 15;
   static const _extraSteps = [15, 30, 45, 60];
 
@@ -68,7 +68,7 @@ class _OrderDetailState extends State<_OrderDetail> {
     final ok = await vm.run(
       action,
       reason: reason,
-      minutes: action == OrderAction.estender ? _extraMin : null,
+      minutes: _isTimed(action) ? _extraMin : null,
     );
     if (!mounted) return;
     if (ok) {
@@ -84,6 +84,8 @@ class _OrderDetailState extends State<_OrderDetail> {
       }
     }
   }
+
+  static bool _isTimed(OrderAction a) => a == OrderAction.estender || a == OrderAction.atrasar;
 
   @override
   Widget build(BuildContext context) {
@@ -128,8 +130,8 @@ class _OrderDetailState extends State<_OrderDetail> {
               borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
-              'Horário remarcado: era ${order.originalTime ?? '--'}, agora ${order.time} '
-              '(+${order.delayMin} min por imprevisto no atendimento anterior).'
+              'Aviso de atraso: o horário era ${order.originalTime ?? '--'} e agora é ${order.time} '
+              '(+${order.delayMin} min).\nMotivo: ${order.delayReason ?? 'imprevisto'}.'
               '${order.status == OrderStatus.confirmado || order.status == OrderStatus.pendente ? ' O cliente pode cancelar sem custo.' : ''}',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onTertiaryContainer),
             ),
@@ -163,8 +165,13 @@ class _OrderDetailState extends State<_OrderDetail> {
         for (final event in order.history) _HistoryItem(event: event),
         const SizedBox(height: AppSpacing.md),
         if (_pending case final action?) ...[
-          if (action == OrderAction.estender) ...[
-            Text('Quanto tempo a mais?', style: theme.textTheme.titleSmall),
+          if (_isTimed(action)) ...[
+            Text(
+              action == OrderAction.atrasar
+                  ? 'Quanto vai atrasar? (hoje o horário é ${order.time})'
+                  : 'Quanto tempo a mais?',
+              style: theme.textTheme.titleSmall,
+            ),
             const SizedBox(height: AppSpacing.xs),
             Wrap(
               spacing: AppSpacing.sm,
@@ -180,7 +187,10 @@ class _OrderDetailState extends State<_OrderDetail> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
               child: Text(
-                'Os próximos clientes afetados são remarcados automaticamente e podem cancelar sem custo.',
+                action == OrderAction.atrasar
+                    ? 'O cliente vê o aviso com o motivo e o novo horário, e pode cancelar sem custo. '
+                        'Os próximos clientes afetados também são remarcados.'
+                    : 'Os próximos clientes afetados são remarcados automaticamente e podem cancelar sem custo.',
                 style: theme.textTheme.bodySmall,
               ),
             ),
@@ -195,8 +205,8 @@ class _OrderDetailState extends State<_OrderDetail> {
               if (_reasonError != null) setState(() => _reasonError = null);
             },
             decoration: InputDecoration(
-              labelText: action == OrderAction.estender
-                  ? 'O que aconteceu? (ex.: acabou a energia)'
+              labelText: _isTimed(action)
+                  ? 'O que aconteceu? (ex.: acabou a energia, equipamento quebrado)'
                   : vm.reasonRequired(action, userId)
                       ? 'Motivo'
                       : 'Motivo (opcional)',

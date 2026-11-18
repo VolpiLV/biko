@@ -2,6 +2,7 @@ import '../../../core/errors/app_exception.dart';
 import '../../../core/viewmodel/base_view_model.dart';
 import '../../../data/models/catalog_models.dart';
 import '../../../data/models/dashboard_models.dart';
+import '../../../data/models/order_model.dart';
 import '../../../data/models/user_role.dart';
 import '../../../data/remote/admin_service.dart';
 import '../../../data/remote/catalog_service.dart';
@@ -27,12 +28,16 @@ class DashboardViewModel extends BaseViewModel {
   bool _loading = false;
   String? _errorMessage;
   List<CategoryModel> _categories = const [];
+  List<OrderModel> _notices = const [];
   ProviderPanel? _panel;
   AdminSummary? _summary;
 
   bool get loading => _loading;
   String? get errorMessage => _errorMessage;
   List<CategoryModel> get categories => _categories;
+
+  /// Cliente: pedidos que o prestador adiou (aviso de atraso).
+  List<OrderModel> get notices => _notices;
   ProviderPanel? get panel => _panel;
   AdminSummary? get summary => _summary;
 
@@ -49,7 +54,9 @@ class DashboardViewModel extends BaseViewModel {
     try {
       switch (role) {
         case UserRole.cliente:
-          _categories = await _catalog.clientHome();
+          final home = await _catalog.clientHome();
+          _categories = home.categories;
+          _notices = home.notices;
         case UserRole.prestador:
           _panel = await _orders.providerPanel();
         case UserRole.admin:

@@ -709,6 +709,51 @@ async function t(name, fn) {
     for (const id of [C, D]) await prest('POST', `/api/orders/${id}/status`, { action: 'cancelar', reason: 'limpeza do teste' });
   });
 
+  await t('aviso de atraso: antes de iniciar, o prestador adia (11:00 -> 11:30), o cliente é avisado e pode cancelar', async () => {
+    const tm = new Date(); tm.setDate(tm.getDate() + 1);
+    const at = (h, m) => { const d = new Date(tm); d.setHours(h, m, 0, 0); return d.getTime(); };
+    const A = rawOrder({ start: at(11, 0), end: at(12, 0) });                                  // Maria, 11:00, confirmado
+    const B = rawOrder({ start: at(12, 0), end: at(13, 0), client: cliente2.id });             // colado: será remarcado
+    const C = rawOrder({ start: at(14, 0), end: at(15, 0), client: cliente2.id });             // longe: não mexe
+    const L = rawOrder({ start: at(19, 0), end: at(20, 0), client: cliente2.id, status: 'pendente' });
+    const delay = (id, minutes, reason, who = prest) => who('POST', `/api/orders/${id}/status`, { action: 'atrasar', minutes, reason });
+
+    assert.ok((await getO(A)).actions.includes('atrasar'));
+    assert.ok(!(await cliente('GET', `/api/orders/${A}`)).data.order.actions.includes('atrasar'));
+    assert.strictEqual((await delay(A, 30, 'x x x', cliente)).status, 403);
+    assert.ok((await delay(A, 30, '')).data.fields.reason);           // motivo obrigatório
+    assert.ok((await delay(A, 20, 'Falta de luz')).data.fields.minutes); // só 15/30/45/60
+
+    const r = (await delay(A, 30, 'Falta de luz no bairro')).data.order;
+    assert.deepStrictEqual([r.time, r.end_time, r.delay_min, r.original_time, r.delay_reason], ['11:30', '12:30', 30, '11:00', 'Falta de luz no bairro']);
+    assert.strictEqual(r.status, 'confirmado');
+    const b = await getO(B), c = await getO(C);
+    assert.deepStrictEqual([b.time, b.delay_min, b.delay_reason], ['12:30', 30, 'Imprevisto no atendimento anterior']);
+    assert.deepStrictEqual([c.time, c.delay_min], ['14:00', 0]);
+    const h = (await getO(A)).history;
+    assert.ok(h.some((e) => e.status === 'atrasado' && /Falta de luz/.test(e.note) && e.actor_name === 'Carlos Silva'));
+
+    // o cliente vê o aviso na tela inicial
+    const home = (await cliente('GET', '/api/cliente/home')).data;
+    assert.ok(home.avisos.some((o) => o.id === A && o.time === '11:30' && o.delay_reason === 'Falta de luz no bairro'));
+    assert.ok((await cliente2.c('GET', '/api/cliente/home')).data.avisos.some((o) => o.id === B));
+
+    // não passa das 22:00 e o total de atraso tem limite
+    assert.strictEqual((await delay(L, 60, 'Equipamento quebrado')).status, 200);       // 20:00-21:00
+    assert.strictEqual((await delay(L, 60, 'Equipamento quebrado de novo')).status, 200); // 21:00-22:00
+    assert.ok((await delay(L, 15, 'mais um pouco')).data.fields.minutes);                 // passaria das 22:00
+    for (let i = 0; i < 3; i++) await delay(A, 60, 'Equipamento quebrado');              // 30 + 180 = 210
+    assert.ok((await delay(A, 45, 'mais')).data.fields.minutes);                          // passaria de 4 h
+
+    // depois de iniciar não dá mais para avisar atraso (aí é "Preciso de mais tempo")
+    const N = rawOrder({ start: Date.now() + 10 * MIN, end: Date.now() + 40 * MIN });
+    await prest('POST', `/api/orders/${N}/status`, { action: 'iniciar' });
+    assert.ok(!(await getO(N)).actions.includes('atrasar'));
+    assert.strictEqual((await delay(N, 15, 'Falta de luz')).status, 409);
+    await prest('POST', `/api/orders/${N}/status`, { action: 'concluir' });
+    for (const id of [A, B, C, L]) await prest('POST', `/api/orders/${id}/status`, { action: 'cancelar', reason: 'limpeza do teste' });
+  });
+
   await t('elástica: sugere a duração pela mediana do tempo real (sem gordura)', async () => {
     const s = (await prest2.c('POST', '/api/services', { ...goodService, title: 'Limpeza de fogão', category: 'Limpeza', duration_min: 60 })).data.service;
     const stats = async () => (await prest2.c('GET', '/api/services/mine')).data.services.find((x) => x.id === s.id).real_stats;

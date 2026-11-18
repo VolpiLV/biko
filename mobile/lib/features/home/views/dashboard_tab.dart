@@ -46,18 +46,45 @@ class _DashboardTabState extends State<DashboardTab> {
     return TabPage(
       onRefresh: vm.load,
       children: switch (vm.role) {
-        UserRole.cliente => _clientHome(context, vm.categories),
+        UserRole.cliente => _clientHome(context, vm),
         UserRole.prestador => _providerHome(context, vm),
         UserRole.admin => _adminHome(context, vm),
       },
     );
   }
 
-  List<Widget> _clientHome(BuildContext context, List<CategoryModel> categories) {
+  List<Widget> _clientHome(BuildContext context, DashboardViewModel vm) {
+    final categories = vm.categories;
     final theme = Theme.of(context);
     final nav = context.read<HomeNavigation>();
     final search = context.read<SearchViewModel>();
     return [
+      if (vm.notices.isNotEmpty) ...[
+        const SectionTitle('Avisos'),
+        for (final o in vm.notices) ...[
+          Container(
+            margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.tertiaryContainer,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '${o.provider.name} avisou um atraso em "${o.serviceTitle}": ${Fmt.dateBR(o.date)}, '
+              'era ${o.originalTime ?? '--'} e agora é ${o.time}.\nMotivo: ${o.delayReason ?? 'imprevisto'}.',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onTertiaryContainer),
+            ),
+          ),
+          OrderCard(
+            order: o,
+            viewerRole: UserRole.cliente,
+            onTap: () async {
+              if (await showOrderDetail(context, o.id)) await vm.load();
+            },
+          ),
+        ],
+        const SizedBox(height: AppSpacing.sm),
+      ],
       Card(
         color: theme.colorScheme.primary,
         clipBehavior: Clip.antiAlias,

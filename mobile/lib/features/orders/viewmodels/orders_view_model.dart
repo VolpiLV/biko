@@ -59,13 +59,17 @@ class OrderDetailViewModel extends FormViewModel {
 
   /// Ação que exige (ou aceita) um motivo antes de enviar.
   bool asksReason(OrderAction action) =>
-      action == OrderAction.recusar || action == OrderAction.cancelar || action == OrderAction.estender;
+      action == OrderAction.recusar ||
+      action == OrderAction.cancelar ||
+      action == OrderAction.estender ||
+      action == OrderAction.atrasar;
 
   /// Cancelar é com motivo opcional só para o cliente do pedido;
   /// recusar (prestador) e cancelar como prestador/admin exigem motivo.
   bool reasonRequired(OrderAction action, int userId) =>
       action == OrderAction.recusar ||
       action == OrderAction.estender ||
+      action == OrderAction.atrasar ||
       (action == OrderAction.cancelar && _order?.client.id != userId);
 
   /// Retorna true se deu certo.

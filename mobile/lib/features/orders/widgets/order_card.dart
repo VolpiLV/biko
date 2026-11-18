@@ -49,7 +49,7 @@ class OrderCard extends StatelessWidget {
                         Flexible(
                           child: Text(
                             '${Fmt.dateBR(order.date)} · ${order.time}–${order.endTime}'
-                            '${order.delayMin > 0 ? ' (remarcado +${order.delayMin} min)' : ''}',
+                            '${order.delayMin > 0 ? ' (atraso +${order.delayMin} min)' : ''}',
                             style: theme.textTheme.bodySmall,
                           ),
                         ),

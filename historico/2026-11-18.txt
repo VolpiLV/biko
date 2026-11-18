@@ -1,0 +1,53 @@
+HISTORICO DE PENSAMENTOS - 18/11/2026
+=====================================
+
+-------------------------------------------------------------------------
+COMO RODAR O APP FLUTTER NO NAVEGADOR
+-------------------------------------------------------------------------
+
+Dois terminais:
+  1. Na pasta biko:          npm start            (API em localhost:3000)
+  2. Na pasta biko/mobile:   flutter pub get
+                             flutter run -d chrome
+
+-------------------------------------------------------------------------
+BOTAO "AVISAR ATRASO / IMPREVISTO" (PRESTADOR)
+-------------------------------------------------------------------------
+
+O que foi pedido (texto do Leonardo):
+  "coloque um botao extra para o prestador de aviso de atraso ...
+  o prestador tera uma funcao de avisar a pessoa que requeriu o servico
+  caso haja algum imprevisto (falta de luz, equipamento quebrado, etc...)
+  e possa adicionar mais um tempo (por exemplo um servico registrado as
+  11 horas da manha ele possa alterar para as 11:30 para sanar este
+  imprevisto)"
+
+Raciocinio:
+  - A agenda elastica de ontem so deixava o prestador pedir mais tempo
+    DEPOIS de iniciar o atendimento, e so dava para iniciar a partir de
+    30 min antes do horario. Se o imprevisto acontece antes (ex.: falta
+    luz as 10:00 e o servico e as 11:00), nao havia como avisar o cliente.
+  - Solucao: uma acao nova "atrasar", ANTES de iniciar, que adia o
+    horario inteiro (inicio e fim) e avisa o cliente com o motivo.
+
+Como funciona:
+  1. No pedido (pendente ou confirmado, ainda nao iniciado), o prestador
+     toca em "Avisar atraso / imprevisto".
+  2. Escolhe +15, +30, +45 ou +60 min e escreve o motivo (obrigatorio).
+     Ex.: 11:00-12:00 vira 11:30-12:30.
+  3. O cliente ve o aviso (horario antigo, novo e o motivo) na tela do
+     pedido e num quadro "Avisos" na tela inicial. Ele pode cancelar sem
+     a regra das 2 h.
+  4. Se o novo horario encosta no proximo cliente do prestador, esse
+     tambem e remarcado em cascata (mesma regra de ontem).
+  5. Limites: no maximo 4 h de atraso somado no pedido e nunca terminando
+     depois das 22:00. Depois de iniciar, o botao some (ai e "Preciso de
+     mais tempo").
+  6. Fica no historico do pedido como "Aviso de atraso".
+
+Onde mudou: servidor (acao "atrasar", coluna delay_reason, avisos em
+/api/cliente/home), tela web, app Flutter, README e teste novo (99 passam).
+
+Pendente: rodar "flutter analyze" e "flutter test". O Flutter 3.50 que
+estava em C:\Users\Leonardo_volpi150\flutter nao existe mais nesta
+maquina (a pasta e o PATH sumiram). Precisa reinstalar.

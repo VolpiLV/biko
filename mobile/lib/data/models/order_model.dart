@@ -25,6 +25,7 @@ enum OrderStatus {
 enum OrderAction {
   confirmar('confirmar', 'Confirmar pedido', 'Pedido confirmado.'),
   recusar('recusar', 'Recusar', 'Pedido recusado.'),
+  atrasar('atrasar', 'Avisar atraso / imprevisto', 'Cliente avisado. O horário foi adiado.'),
   iniciar('iniciar', 'Iniciar atendimento', 'Atendimento iniciado.'),
   estender('estender', 'Preciso de mais tempo', 'Tempo prorrogado. A agenda foi ajustada.'),
   concluir('concluir', 'Marcar como concluído', 'Pedido concluído.'),
@@ -66,6 +67,7 @@ class OrderParty {
 /// Rótulo de um item do histórico: status do pedido ou evento da agenda elástica.
 String orderEventLabel(String kind) {
   const extra = {
+    'atrasado': 'Aviso de atraso',
     'iniciado': 'Atendimento iniciado',
     'prorrogado': 'Tempo prorrogado',
     'remarcado': 'Horário remarcado',
@@ -121,6 +123,7 @@ class OrderModel {
     this.extendedMin = 0,
     this.delayMin = 0,
     this.originalTime,
+    this.delayReason,
     this.realDurationMin,
   });
 
@@ -156,9 +159,13 @@ class OrderModel {
   /// Minutos que o prestador prorrogou (imprevisto).
   final int extendedMin;
 
-  /// Minutos que este pedido foi empurrado por atraso do atendimento anterior.
+  /// Minutos que este pedido foi adiado (aviso de atraso do prestador ou
+  /// atraso do atendimento anterior).
   final int delayMin;
   final String? originalTime;
+
+  /// Motivo do atraso que o cliente vê (ex.: "Falta de luz").
+  final String? delayReason;
   final int? realDurationMin;
 
   factory OrderModel.fromJson(Map<String, dynamic> json) {
@@ -189,6 +196,7 @@ class OrderModel {
       extendedMin: readNumOrNull(json, 'extended_min')?.round() ?? 0,
       delayMin: readNumOrNull(json, 'delay_min')?.round() ?? 0,
       originalTime: readStringOrNull(json, 'original_time'),
+      delayReason: readStringOrNull(json, 'delay_reason'),
       realDurationMin: readNumOrNull(json, 'real_duration_min')?.round(),
     );
   }

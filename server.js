@@ -241,7 +241,12 @@ route('POST', '/api/auth/reset', {}, (ctx) => {
 });
 
 // ----- ÁREAS POR PERFIL (controle de acesso no backend) -----
-route('GET', '/api/cliente/home', { auth: true, roles: ['cliente', 'admin'] }, () => [200, { categorias: categoryList() }]);
+// avisos: pedidos ativos do cliente que o prestador adiou (aviso de atraso ou remarcação em cascata)
+route('GET', '/api/cliente/home', { auth: true, roles: ['cliente', 'admin'] }, (ctx) => {
+  const avisos = db.prepare(`${ORDER_SELECT} WHERE o.client_id = ? AND o.status IN ('pendente','confirmado') AND o.delay_min > 0 AND o.end_ts > ?
+    ORDER BY o.start_ts LIMIT 5`).all(ctx.user.id, now()).map((o) => orderView(o, ctx.user));
+  return [200, { categorias: categoryList(), avisos }];
+});
 
 route('GET', '/api/prestador/painel', { auth: true, roles: ['prestador', 'admin'] }, (ctx) => {
   const id = ctx.user.id;
@@ -549,12 +554,18 @@ const EXTEND_STEPS = [15, 30, 45, 60];          // prorrogação em blocos de 15
 const MAX_EXTEND_MIN = 240;                     // no máximo 4 h a mais no total
 const HARD_CLOSE_HOUR = 22;                     // imprevisto pode passar das 20h, mas não das 22h
 const SHIFT_ROUND_MS = 5 * 60e3;                // remarcações arredondadas para 5 min
+// Aviso de atraso: ANTES de iniciar, o prestador avisa o cliente de um imprevisto
+// (falta de luz, equipamento quebrado...) e adia o horário (ex.: 11:00 -> 11:30).
+const DELAY_STEPS = [15, 30, 45, 60];
+const MAX_DELAY_MIN = 240;                      // no máximo 4 h de atraso somado no pedido
+const CASCADE_REASON = 'Imprevisto no atendimento anterior';
 
 // ação -> { novo status, quem pode, estados de origem permitidos, se exige motivo }
-// iniciar/estender não mudam o status (continua "confirmado"), só registram no histórico.
+// atrasar/iniciar/estender não mudam o status (continua "confirmado"), só registram no histórico.
 const ACTIONS = {
   confirmar: { to: 'confirmado', from: ['pendente'], who: 'prestador' },
   recusar:   { to: 'recusado',   from: ['pendente'], who: 'prestador', reason: true },
+  atrasar:   { to: null,         from: ['pendente', 'confirmado'], who: 'prestador', reason: true },
   iniciar:   { to: 'confirmado', from: ['confirmado'], who: 'prestador' },
   estender:  { to: 'confirmado', from: ['confirmado'], who: 'prestador', reason: true },
   concluir:  { to: 'concluido',  from: ['confirmado'], who: 'prestador' },
@@ -593,6 +604,7 @@ function availableActions(o, user, t = now()) {
   for (const [name, a] of Object.entries(ACTIONS)) {
     if (!a.from.includes(o.status)) continue;
     if (a.who === 'prestador' && !isProvider) continue;
+    if (name === 'atrasar' && (o.started_ts || o.delay_min >= MAX_DELAY_MIN || t >= o.end_ts)) continue;
     if (name === 'iniciar' && (o.started_ts || t < o.start_ts - START_EARLY_MS)) continue;
     if (name === 'estender' && (!o.started_ts || o.extended_min >= MAX_EXTEND_MIN)) continue;
     if (name === 'concluir' && !o.started_ts && o.start_ts > t) continue;
@@ -618,6 +630,7 @@ function orderView(o, user) {
     extended_min: o.extended_min || 0,
     delay_min: o.delay_min || 0,
     original_time: o.delay_min ? fmtTime(o.start_ts - o.delay_min * 60000) : null,
+    delay_reason: o.delay_min ? (o.delay_reason || CASCADE_REASON) : null,
     real_duration_min: o.status === 'concluido' && o.started_ts && o.completed_ts ? Math.max(1, Math.round((o.completed_ts - o.started_ts) / 60000)) : null,
     address: o.address, notes: o.notes, created_at: o.created_at,
     client: { id: o.client_id, name: o.client_name, photo_url: photoUrl(o.client_id, o.client_photo_v), phone: seeContact ? o.client_phone : null },
@@ -648,8 +661,8 @@ function pushFollowing(o, newEnd) {
     if (r.start_ts >= cursor) break;
     const shift = Math.ceil((cursor - r.start_ts) / SHIFT_ROUND_MS) * SHIFT_ROUND_MS;
     const shiftMin = shift / 60000;
-    db.prepare('UPDATE orders SET start_ts = start_ts + ?, end_ts = end_ts + ?, planned_end_ts = COALESCE(planned_end_ts, end_ts) + ?, delay_min = delay_min + ?, updated_at = ? WHERE id = ?')
-      .run(shift, shift, shift, shiftMin, now(), r.id);
+    db.prepare('UPDATE orders SET start_ts = start_ts + ?, end_ts = end_ts + ?, planned_end_ts = COALESCE(planned_end_ts, end_ts) + ?, delay_min = delay_min + ?, delay_reason = ?, updated_at = ? WHERE id = ?')
+      .run(shift, shift, shift, shiftMin, CASCADE_REASON, now(), r.id);
     addEvent(r.id, 'remarcado', null, `Novo horário ${fmtTime(r.start_ts + shift)}–${fmtTime(r.end_ts + shift)} (+${shiftMin} min por imprevisto no atendimento anterior). O cliente pode cancelar sem custo.`);
     cursor = r.end_ts + shift;
     moved++;
@@ -761,6 +774,23 @@ route('POST', '/api/orders/:id/status', { auth: true }, (ctx) => {
     const needReason = a.reason || (action === 'cancelar' && !isClient);
     if (needReason && reason.length < 3) fail(400, 'Informe o motivo.', { reason: 'Informe o motivo (mín. 3 caracteres).' });
     if (reason.length > 200) fail(400, 'O motivo pode ter no máximo 200 caracteres.', { reason: 'Máximo de 200 caracteres.' });
+
+    if (action === 'atrasar') {
+      if (o.started_ts) fail(409, 'O atendimento já começou. Use "Preciso de mais tempo".');
+      if (t >= o.end_ts) fail(400, 'O horário deste pedido já passou.');
+      const min = Number(ctx.body.minutes);
+      if (!DELAY_STEPS.includes(min)) fail(400, 'Escolha de quanto será o atraso.', { minutes: `Escolha ${DELAY_STEPS.join(', ')} minutos.` });
+      if (o.delay_min + min > MAX_DELAY_MIN) fail(400, `O pedido pode ser adiado no máximo ${MAX_DELAY_MIN / 60} h no total. Combine outro dia com o cliente.`, { minutes: 'Limite de atraso atingido.' });
+      const newStart = o.start_ts + min * 60000, newEnd = o.end_ts + min * 60000;
+      if (newStart < t) fail(400, 'O novo horário já passou. Escolha um atraso maior.', { minutes: 'O novo horário já passou.' });
+      const limit = new Date(o.start_ts); limit.setHours(HARD_CLOSE_HOUR, 0, 0, 0);
+      if (newEnd > limit.getTime()) fail(400, `Com esse atraso o serviço passaria das ${HARD_CLOSE_HOUR}:00. Combine outro dia com o cliente.`, { minutes: `Passaria das ${HARD_CLOSE_HOUR}:00.` });
+      db.prepare('UPDATE orders SET start_ts = ?, end_ts = ?, planned_end_ts = CASE WHEN planned_end_ts IS NULL THEN NULL ELSE planned_end_ts + ? END, delay_min = delay_min + ?, delay_reason = ?, updated_at = ? WHERE id = ?')
+        .run(newStart, newEnd, min * 60000, min, reason, t, o.id);
+      const moved = pushFollowing(o, newEnd);
+      addEvent(o.id, 'atrasado', ctx.user.id, `Novo horário ${fmtTime(newStart)}–${fmtTime(newEnd)} (+${min} min): ${reason}. O cliente pode cancelar sem custo${movedNote(moved)}`);
+      return o.id;
+    }
 
     if (action === 'iniciar') {
       if (o.started_ts) fail(409, 'Este atendimento já foi iniciado.');
