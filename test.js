@@ -7,6 +7,9 @@ const assert = require('assert');
 // banco temporário, para não mexer no biko.db real
 const tmp = path.join(os.tmpdir(), `biko-test-${Date.now()}.db`);
 process.env.BIKO_DB = tmp;
+// Microsserviço de notificações: começa "fora do ar" (porta fechada); mais abaixo ele é ligado
+process.env.NOTIF_URL = 'http://127.0.0.1:1';
+process.env.NOTIF_DB = path.join(os.tmpdir(), `biko-notif-test-${Date.now()}.db`);
 const server = require('./server');
 
 let base;
@@ -907,6 +910,92 @@ async function t(name, fn) {
     assert.strictEqual((await cliente('GET', '/api/admin/resumo')).status, 403);
   });
 
+  // =====================================================================
+  // MICROSSERVIÇO DE NOTIFICAÇÕES
+  // =====================================================================
+  const { notificador } = server;
+  await t('notificações: sem login -> 401', async () => assert.strictEqual((await anon('GET', '/api/notificacoes')).status, 401));
+  let oN;
+  await t('notificações: microsserviço fora do ar -> 503, mas o pedido é criado normalmente e o evento espera na fila', async () => {
+    assert.strictEqual((await cliente('GET', '/api/notificacoes')).status, 503);
+    const r = await book(cliente, vaza, D(47), '08:00');
+    assert.strictEqual(r.status, 201);
+    oN = r.data.order;
+    assert.ok(notificador.pendentes() > 0);
+  });
+  const ms = require('./notificacoes/server');
+  await new Promise((r) => ms.listen(0, '127.0.0.1', r));
+  process.env.NOTIF_URL = `http://127.0.0.1:${ms.address().port}`;
+  const msUrl = process.env.NOTIF_URL;
+  await t('notificações: quando o microsserviço volta, a fila é entregue sem perder nada', async () => {
+    // forcar: os eventos que falharam estão esperando a próxima tentativa; aqui entregamos já
+    for (let i = 0; i < 10 && notificador.pendentes() > 0; i++) { await notificador.flush(true); await new Promise((r) => setImmediate(r)); }
+    assert.strictEqual(notificador.pendentes(), 0);
+  });
+  await t('notificações: prestador recebe "Novo pedido" (título = nome da ação, sem data)', async () => {
+    const d = (await prest('GET', '/api/notificacoes')).data;
+    const n = d.notificacoes.find((x) => x.pedido_id === oN.id);
+    assert.ok(n, 'notificação do pedido novo');
+    assert.strictEqual(n.titulo, 'Novo pedido');
+    assert.strictEqual(n.acao, 'pendente');
+    assert.strictEqual(n.lida, false);
+    assert.ok(/Maria/.test(n.mensagem));
+    assert.ok(!('criada_em' in n) && !('created_at' in n), 'a lista não traz a data');
+    assert.ok(d.nao_lidas >= 1);
+  });
+  await t('notificações: quem fez a ação não é notificado', async () => {
+    const d = (await cliente('GET', '/api/notificacoes?limit=50')).data;
+    assert.ok(!d.notificacoes.some((x) => x.pedido_id === oN.id && x.acao === 'pendente'));
+  });
+  await t('notificações: prestador confirma -> cliente recebe "Pedido confirmado" e o contador sobe', async () => {
+    const antes = (await cliente('GET', '/api/notificacoes/contagem')).data.nao_lidas;
+    assert.strictEqual((await prest('POST', `/api/orders/${oN.id}/status`, { action: 'confirmar' })).status, 200);
+    const depois = (await cliente('GET', '/api/notificacoes/contagem')).data.nao_lidas;
+    assert.strictEqual(depois, antes + 1);
+    const n = (await cliente('GET', '/api/notificacoes?nao_lidas=1')).data.notificacoes[0];
+    assert.strictEqual(n.titulo, 'Pedido confirmado');
+    assert.strictEqual(n.pedido_id, oN.id);
+  });
+  await t('notificações: aviso de atraso chega ao cliente com o motivo', async () => {
+    assert.strictEqual((await prest('POST', `/api/orders/${oN.id}/status`, { action: 'atrasar', minutes: 30, reason: 'Pneu furado' })).status, 200);
+    const n = (await cliente('GET', '/api/notificacoes')).data.notificacoes[0];
+    assert.strictEqual(n.titulo, 'Aviso de atraso');
+    assert.ok(/Pneu furado/.test(n.mensagem) && /08:30/.test(n.mensagem));
+  });
+  await t('notificações: marcar como lida (só a dona); de outro usuário -> 404', async () => {
+    const n = (await cliente('GET', '/api/notificacoes?nao_lidas=1')).data.notificacoes[0];
+    assert.strictEqual((await prest('POST', `/api/notificacoes/${n.id}/lida`)).status, 404);
+    assert.strictEqual((await cliente('POST', '/api/notificacoes/abc/lida')).status, 404);
+    const r = await cliente('POST', `/api/notificacoes/${n.id}/lida`);
+    assert.strictEqual(r.status, 200);
+    const again = (await cliente('GET', '/api/notificacoes?limit=50')).data.notificacoes.find((x) => x.id === n.id);
+    assert.strictEqual(again.lida, true);
+  });
+  await t('notificações: marcar todas como lidas zera o contador', async () => {
+    assert.strictEqual((await cliente('POST', '/api/notificacoes/lidas')).status, 200);
+    assert.strictEqual((await cliente('GET', '/api/notificacoes/contagem')).data.nao_lidas, 0);
+  });
+  await t('notificações: cancelamento pelo admin avisa cliente e prestador', async () => {
+    assert.strictEqual((await admin('POST', `/api/orders/${oN.id}/status`, { action: 'cancelar', reason: 'Teste do admin' })).status, 200);
+    for (const who of [cliente, prest]) {
+      const n = (await who('GET', '/api/notificacoes')).data.notificacoes[0];
+      assert.strictEqual(n.titulo, 'Pedido cancelado');
+      assert.ok(/Teste do admin/.test(n.mensagem));
+    }
+  });
+  await t('microsserviço: sem a chave de serviço -> 401 (ninguém de fora lê as notificações)', async () => {
+    assert.strictEqual((await fetch(`${msUrl}/usuarios/1/notificacoes`)).status, 401);
+    assert.strictEqual((await fetch(`${msUrl}/usuarios/1/notificacoes`, { headers: { 'X-Service-Key': 'errada' } })).status, 401);
+    assert.strictEqual((await fetch(`${msUrl}/saude`)).status, 200);
+  });
+  await t('microsserviço: o mesmo evento chegando 2 vezes não duplica (idempotente)', async () => {
+    const ev = { evento_id: 999999, acao: 'confirmado', pedido: { id: oN.id, servico: 'X', data: '2030-01-01', hora: '10:00' }, cliente_id: 2, prestador_id: 3, ator_id: 3, ator_nome: 'Carlos' };
+    const post = () => fetch(`${msUrl}/eventos`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Service-Key': 'biko-dev-key' }, body: JSON.stringify(ev) }).then((r) => r.json());
+    assert.strictEqual((await post()).criadas, 1);
+    assert.strictEqual((await post()).criadas, 0);
+  });
+  ms.close();
+
   // ---------- FORÇA BRUTA ----------
   await t('bloqueia após 5 tentativas erradas (429)', async () => {
     let last;
@@ -917,6 +1006,7 @@ async function t(name, fn) {
   console.log('\nResultados:\n' + results.join('\n'));
   console.log(`\n${passed}/${results.length} testes passaram`);
   server.close();
+  for (const f of [process.env.NOTIF_DB, process.env.NOTIF_DB + '-wal', process.env.NOTIF_DB + '-shm']) { try { fs.rmSync(f, { force: true }); } catch (e) { /* ok */ } }
   try { fs.rmSync(tmp, { force: true }); fs.rmSync(tmp + '-wal', { force: true }); fs.rmSync(tmp + '-shm', { force: true }); } catch (e) { /* ok */ }
   process.exit(process.exitCode || 0);
 })();

@@ -104,6 +104,21 @@ if (!orderCols.includes('delay_min')) db.exec('ALTER TABLE orders ADD COLUMN del
 // Aviso de atraso: o último motivo que o cliente precisa ver (ex.: "Acabou a energia").
 if (!orderCols.includes('delay_reason')) db.exec('ALTER TABLE orders ADD COLUMN delay_reason TEXT');
 
+// Caixa de saída das notificações (padrão "outbox"): o evento é gravado NA MESMA transação
+// que muda o pedido. Depois o notificador.js entrega para o microsserviço de notificações.
+// Se o microsserviço estiver fora do ar, nada se perde: o evento espera aqui e é reenviado.
+db.exec(`
+CREATE TABLE IF NOT EXISTS notification_outbox (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  payload     TEXT NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  next_try_at INTEGER NOT NULL,
+  sent_at     INTEGER,
+  last_error  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_pending ON notification_outbox(sent_at, next_try_at);
+`);
+
 // ---- hash de senha (scrypt + salt aleatório) ----
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');

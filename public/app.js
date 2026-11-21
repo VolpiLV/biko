@@ -7,6 +7,7 @@ const state = {
   users: [], filters: { search: '', role: '', status: '' },          // gestão de usuários (admin)
   search: { q: '', category: '', maxPrice: '', sort: '' }, results: [], total: 0, categories: null, // busca
   orders: [], orderFilter: '', myServices: [],
+  notifCount: 0,                                                      // sino de notificações (microsserviço)
 };
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -234,7 +235,9 @@ function enterApp(user) {
   state.user = user;
   state.tab = 'home';
   state.view = 'app';
+  state.notifCount = 0;
   render();
+  refreshBell();
 }
 
 // ---------- formatação ----------
@@ -275,7 +278,7 @@ function shell(content) {
     <div class="screen">
       <div class="top"><div class="hello">
         <div><h2>Olá, ${esc(u.name.split(' ')[0])} 👋</h2><p>${u.role === 'cliente' ? 'O que você precisa hoje?' : u.role === 'prestador' ? 'Veja seus pedidos de hoje' : 'Painel administrativo'}</p></div>
-        ${avatarHtml(u)}
+        <div class="top-right">${bellHtml()}${avatarHtml(u)}</div>
       </div></div>
       ${content}
     </div>
@@ -312,6 +315,67 @@ async function viewApp() {
 function goTab(tab) { state.tab = tab; viewApp(); }
 function bindNav() {
   $app.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => goTab(b.dataset.tab)));
+  const bell = $app.querySelector('#bell');
+  if (bell) bell.onclick = notifModal;
+}
+
+// ---------- notificações (vêm do microsserviço, passando pela API principal) ----------
+function bellHtml() {
+  const n = state.notifCount;
+  return `<button type="button" class="bell" id="bell" aria-label="Notificações${n ? ` (${n} não lidas)` : ''}">🔔${n ? `<span class="bell-count">${n > 9 ? '9+' : n}</span>` : ''}</button>`;
+}
+function paintBell() {
+  const b = $app.querySelector('#bell');
+  if (b) { b.outerHTML = bellHtml(); $app.querySelector('#bell').onclick = notifModal; }
+}
+// Atualiza o número do sino. Se o microsserviço estiver fora do ar, o sino só fica sem número.
+async function refreshBell() {
+  if (!state.user) return;
+  try { state.notifCount = (await api('GET', '/api/notificacoes/contagem')).nao_lidas; }
+  catch (e) { state.notifCount = 0; }
+  paintBell();
+}
+setInterval(() => { if (state.user && !document.hidden) refreshBell(); }, 20000);
+
+// Histórico de notificações: cada item mostra o NOME DA AÇÃO (ex.: "Pedido confirmado"), não a data.
+const NOTIF_ICON = { pendente: '🆕', confirmado: '✅', recusado: '⛔', cancelado: '✖️', concluido: '🏁', atrasado: '⏰', iniciado: '▶️', prorrogado: '⏳', remarcado: '🔁' };
+async function notifModal() {
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = '<div class="sheet"><h3>Notificações</h3><div class="spinner">Carregando…</div></div>';
+  $app.appendChild(ov);
+  const close = () => ov.remove();
+  ov.onclick = (e) => { if (e.target === ov) close(); };
+  let d;
+  try { d = await api('GET', '/api/notificacoes?limit=30'); }
+  catch (err) {
+    ov.querySelector('.sheet').innerHTML = `<h3>Notificações</h3><div class="notice warn">${esc(err.message)}</div><button type="button" class="btn secondary" id="nClose">Fechar</button>`;
+    ov.querySelector('#nClose').onclick = close;
+    return;
+  }
+  state.notifCount = d.nao_lidas; paintBell();
+  const item = (n) => `<li class="notif ${n.lida ? '' : 'unread'}" data-id="${n.id}" data-order="${n.pedido_id || ''}">
+      <span class="notif-ico">${NOTIF_ICON[n.acao] || '🔔'}</span>
+      <div><b>${esc(n.titulo)}</b><small>${esc(n.mensagem)}</small></div>
+    </li>`;
+  ov.querySelector('.sheet').innerHTML = `
+    <div class="row-between"><h3>Notificações</h3>${d.nao_lidas ? `<button type="button" class="link" id="nAll">Marcar todas como lidas</button>` : ''}</div>
+    ${d.notificacoes.length ? `<ul class="notif-list">${d.notificacoes.map(item).join('')}</ul>` : '<div class="empty">Nenhuma notificação por enquanto.</div>'}
+    <button type="button" class="btn secondary" id="nClose" style="margin-top:12px">Fechar</button>`;
+  ov.querySelector('#nClose').onclick = close;
+  const all = ov.querySelector('#nAll');
+  if (all) all.onclick = async () => {
+    try { await api('POST', '/api/notificacoes/lidas'); } catch (err) { return toast(err.message, true); }
+    ov.querySelectorAll('.notif.unread').forEach((li) => li.classList.remove('unread'));
+    all.remove(); state.notifCount = 0; paintBell();
+  };
+  ov.querySelectorAll('.notif').forEach((li) => (li.onclick = async () => {
+    if (li.classList.contains('unread')) {
+      try { state.notifCount = (await api('POST', `/api/notificacoes/${li.dataset.id}/lida`)).nao_lidas; paintBell(); } catch (e) { /* segue mesmo assim */ }
+    }
+    if (li.dataset.order) { close(); orderModal(Number(li.dataset.order)); }
+    else li.classList.remove('unread');
+  }));
 }
 
 // ---------- início ----------
@@ -591,6 +655,7 @@ async function orderModal(id) {
       close();
       toast(ACTION_DONE[action]);
       await viewApp();
+      refreshBell();
     } catch (err) {
       const inForm = !ov.querySelector('#reasonBox').hidden;
       const f = err.fields || {};

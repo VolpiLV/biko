@@ -2,6 +2,9 @@
 biko.db
 biko.db-shm
 biko.db-wal
+notificacoes/notificacoes.db
+notificacoes/notificacoes.db-shm
+notificacoes/notificacoes.db-wal
 
 node_modules/
 .env

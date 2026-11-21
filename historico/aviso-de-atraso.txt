@@ -1,5 +1,5 @@
-HISTORICO DE PENSAMENTOS - 18/11/2026
-=====================================
+HISTORICO DE PENSAMENTOS - AVISO DE ATRASO
+==========================================
 
 -------------------------------------------------------------------------
 COMO RODAR O APP FLUTTER NO NAVEGADOR

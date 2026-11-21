@@ -8,6 +8,7 @@ Atividade avaliativa. Esta versão cobre tudo da tabela de requisitos, menos pag
 4. **Perfil do usuário** (dados, senha, foto)
 5. **Agendamento / pedidos / reservas** (com regras de negócio)
 6. **Busca** funcional sobre os dados reais
+7. **Microsserviço de notificações** (processo e banco próprios) — passo a passo em [`notificacoes/PASSO_A_PASSO.md`](notificacoes/PASSO_A_PASSO.md)
 
 O visual segue o protótipo (azul Biko, laranja de destaque, layout de celular).
 
@@ -16,19 +17,19 @@ O visual segue o protótipo (azul Biko, laranja de destaque, layout de celular).
 Precisa do **Node.js 22.13 ou mais novo** (https://nodejs.org). Não tem `npm install`: o projeto não usa nenhuma biblioteca externa.
 
 ```bash
-node --disable-warning=ExperimentalWarning server.js
-# ou: npm start
+npm run tudo          # sobe a API (porta 3000) e o microsserviço de notificações (porta 3001)
 ```
+
+Ou em dois terminais: `npm run notificacoes` e `npm start`. A API funciona mesmo sem o microsserviço; só o sino de notificações fica fora do ar.
 
 Abra http://localhost:3000. O banco `biko.db` é criado sozinho na primeira vez, já com usuários, serviços e pedidos de exemplo.
 
 Para zerar tudo, pare o servidor e apague os arquivos `biko.db*`.
 
-Testes automatizados do backend (99 testes, usam um banco temporário e não mexem no `biko.db`):
+Testes automatizados (111 da API + 10 do microsserviço; usam bancos temporários e não mexem no `biko.db`):
 
 ```bash
-node --disable-warning=ExperimentalWarning test.js
-# ou: npm test
+npm test
 ```
 
 ## Usuários de demonstração
@@ -111,20 +112,38 @@ Aba *Buscar* do cliente. Procura nos serviços ativos de prestadores ativos:
 - Sem resultado, a tela mostra "Nenhum resultado encontrado" com o botão **Limpar filtros**, e o contador mostra 0.
 - Serviço de prestador desativado (ou que virou cliente) some da busca na hora.
 
+## 7 — Microsserviço de notificações
+
+Cada ação num pedido (novo pedido, confirmar, recusar, cancelar, aviso de atraso, iniciar, prorrogar, concluir, remarcação) vira uma notificação para a outra parte. O título é o **nome da ação**. No topo da tela tem um sino 🔔 com o número de não lidas; o histórico de notificações mostra o nome da ação e a mensagem (sem data), e tocar abre o pedido.
+
+- Roda num **processo separado** (`notificacoes/`, porta 3001) com **banco próprio** (`notificacoes.db`).
+- A API grava o evento numa caixa de saída (`notification_outbox`) na mesma transação do pedido, e o `notificador.js` entrega ao microsserviço. Se ele cair, nada se perde: é reenviado quando voltar.
+- O navegador só fala com a API principal (`/api/notificacoes`), que confere o login. Entre a API e o microsserviço vai a chave `X-Service-Key`.
+
+Detalhes, diagrama e roteiro de apresentação: [`notificacoes/PASSO_A_PASSO.md`](notificacoes/PASSO_A_PASSO.md).
+
 ## Estrutura
 
 ```
 biko/
 ├── server.js        # servidor HTTP + rotas da API + regras de acesso e de negócio
 ├── db.js            # SQLite (node:sqlite): tabelas, migração, hash de senha, dados de exemplo
-├── test.js          # testes automatizados do backend (99)
+├── test.js          # testes automatizados do backend (111)
+├── notificador.js   # ponte com o microsserviço: caixa de saída, reenvio e consulta
+├── iniciar.js       # "npm run tudo": sobe os dois processos
+├── notificacoes/    # MICROSSERVIÇO de notificações (porta 3001, banco notificacoes.db)
+│   ├── server.js
+│   ├── db.js
+│   ├── test.js
+│   └── PASSO_A_PASSO.md
+├── historico/       # histórico de raciocínio (um arquivo por ação, nome = nome da ação)
 └── public/
     ├── index.html
     ├── style.css
     └── app.js       # telas: login, cadastro, recuperação, início, busca, pedidos, serviços, conta, usuários
 ```
 
-Tabelas: `users`, `sessions`, `password_resets`, `user_photos`, `services`, `orders`, `order_events`.
+Tabelas: `users`, `sessions`, `password_resets`, `user_photos`, `services`, `orders`, `order_events`, `notification_outbox`. O microsserviço tem a sua: `notificacoes`.
 
 ## Rotas da API
 
@@ -157,6 +176,10 @@ Tabelas: `users`, `sessions`, `password_resets`, `user_photos`, `services`, `ord
 | POST   | /api/users                    | admin                  |
 | PATCH  | /api/users/:id                | admin                  |
 | POST   | /api/users/:id/password       | admin                  |
+| GET    | /api/notificacoes?limit=&offset=&nao_lidas=1 | logado (só as próprias) |
+| GET    | /api/notificacoes/contagem    | logado                 |
+| POST   | /api/notificacoes/:id/lida    | logado (só as próprias) |
+| POST   | /api/notificacoes/lidas       | logado                 |
 
 ## Observações
 

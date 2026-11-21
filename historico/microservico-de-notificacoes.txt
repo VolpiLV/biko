@@ -1,0 +1,70 @@
+HISTORICO DE PENSAMENTOS - MICROSERVICO DE NOTIFICACOES
+========================================================
+
+(A partir daqui os arquivos do historico tem o NOME DA ACAO, nao a data.)
+
+-------------------------------------------------------------------------
+O QUE FOI PEDIDO
+-------------------------------------------------------------------------
+
+  Duplicar o projeto biko (mesmos arquivos, nao do zero), identificar um
+  microsservico que faca sentido adicionar, implementar e explicar o
+  passo a passo de como ele funciona.
+
+-------------------------------------------------------------------------
+RACIOCINIO: QUAL MICROSSERVICO
+-------------------------------------------------------------------------
+
+  - Olhando o projeto, o que mais fazia falta era AVISAR as pessoas.
+    O cliente so sabia que o pedido foi confirmado se abrisse a aba
+    Pedidos; o prestador so via pedido novo entrando no painel.
+  - Notificacao e a parte mais natural de separar:
+      * nao e regra principal (se cair, agendar tem que continuar);
+      * tem dados proprios (quem recebeu, o que foi lido);
+      * pode crescer depois (e-mail, push no celular) sem mexer na API.
+  - Outras opcoes pensadas e descartadas por agora: pagamentos (fora do
+    escopo do projeto), avaliacoes (ainda nao existem no Biko), busca
+    (ja funciona bem dentro da API e depende dos dados dos servicos).
+
+-------------------------------------------------------------------------
+SOLUCAO ADOTADA
+-------------------------------------------------------------------------
+
+  1. Pasta nova "notificacoes/": processo separado (porta 3001), banco
+     proprio (notificacoes.db), sem bibliotecas externas.
+  2. Cada acao no pedido ja gerava um evento no historico (addEvent).
+     Agora esse evento tambem vai para uma "caixa de saida" (tabela
+     notification_outbox) NA MESMA transacao do pedido.
+  3. O notificador.js entrega a caixa de saida ao microsservico a cada
+     2 s. Se ele estiver fora do ar, espera e tenta de novo. Nada se perde.
+  4. O microsservico decide quem recebe e o texto. O titulo de cada
+     notificacao e o NOME DA ACAO (Novo pedido, Pedido confirmado,
+     Aviso de atraso, Horario remarcado...). Quem fez a acao nao recebe.
+     O mesmo evento chegando 2 vezes nao duplica.
+  5. No site apareceu um sino com o numero de nao lidas. O historico de
+     notificacoes mostra o nome da acao e a mensagem, sem a data.
+     Tocar numa notificacao marca como lida e abre o pedido.
+  6. O navegador nunca fala direto com o microsservico: passa pela API
+     principal, que confere o login. Entre os dois servicos tem a chave
+     X-Service-Key.
+
+  Passo a passo completo: notificacoes/PASSO_A_PASSO.md
+
+-------------------------------------------------------------------------
+COMO RODAR
+-------------------------------------------------------------------------
+
+  Os dois juntos:      npm run tudo
+  Ou dois terminais:   npm run notificacoes     (porta 3001)
+                       npm start                (porta 3000)
+
+  Testes:              npm test
+  Resultado: 111 testes da API (12 novos) + 10 do microsservico, todos
+  passando.
+
+-------------------------------------------------------------------------
+PENDENTE
+-------------------------------------------------------------------------
+
+  - O app Flutter (pasta mobile) ainda nao mostra o sino. As rotas
+    /api/notificacoes ja estao prontas para ele usar.

@@ -1,9 +1,10 @@
-HISTORICO DE PENSAMENTOS - 17/11/2026
-=====================================
+HISTORICO DE PENSAMENTOS - AGENDA ELASTICA E FLUTTER NOVO
+=========================================================
 
 - Criada a pasta "historico" para guardar o historico das conversas e
   raciocinios sobre o projeto biko.
-- Cada arquivo = um dia de conversa (nome no formato AAAA-MM-DD.txt).
+- Cada arquivo = uma acao/assunto (nome do arquivo = nome da acao,
+  ex.: aviso-de-atraso.txt), e nao mais a data.
 
 -------------------------------------------------------------------------
 PROBLEMA: TEMPO DO SERVICO x IMPREVISTOS

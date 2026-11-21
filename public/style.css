@@ -239,3 +239,17 @@ textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-sof
 .chip input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
 .hint { display: block; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
 .real-stats { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+
+/* ---------- sino e histórico de notificações ---------- */
+.top-right { display: flex; align-items: center; gap: 10px; }
+.bell { position: relative; width: 42px; height: 42px; border-radius: 50%; border: 0; background: rgba(255,255,255,.18); font-size: 19px; cursor: pointer; display: grid; place-items: center; }
+.bell:hover { background: rgba(255,255,255,.28); }
+.bell-count { position: absolute; top: -3px; right: -3px; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 10px; background: var(--orange); color: #fff; font-size: 11px; font-weight: 700; line-height: 19px; text-align: center; box-shadow: 0 0 0 2px var(--blue); }
+.notif-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; max-height: 55vh; overflow-y: auto; }
+.notif { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid #e6ebf2; border-radius: 12px; cursor: pointer; background: #fff; }
+.notif:hover { border-color: var(--blue); }
+.notif.unread { background: var(--blue-soft); border-color: #c4dcfb; }
+.notif.unread b::after { content: ''; display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--orange); vertical-align: middle; }
+.notif-ico { font-size: 18px; line-height: 1.2; }
+.notif b { display: block; font-size: 14px; }
+.notif small { display: block; margin-top: 2px; font-size: 12.5px; color: var(--muted); line-height: 1.35; }

@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { db, hashPassword, verifyPassword, tx } = require('./db');
+const notificador = require('./notificador'); // ponte com o microsserviço de notificações (pasta notificacoes/)
+notificador.preencherInicial();
 
 const COOKIE = 'biko_sid';
 const SESSION_MS = 7 * 24 * 60 * 60 * 1000; // sessão persistida por 7 dias
@@ -646,7 +648,10 @@ function loadOrderFor(user, id) {
   return o;
 }
 function addEvent(orderId, status, actorId, note) {
-  db.prepare('INSERT INTO order_events (order_id, status, actor_id, note, created_at) VALUES (?,?,?,?,?)').run(orderId, status, actorId, note || null, now());
+  const info = db.prepare('INSERT INTO order_events (order_id, status, actor_id, note, created_at) VALUES (?,?,?,?,?)').run(orderId, status, actorId, note || null, now());
+  // Todo evento do pedido também vai para a caixa de saída do microsserviço de notificações
+  // (mesma transação: se o pedido não gravar, a notificação também não existe).
+  notificador.publicar(info.lastInsertRowid, orderId, status, actorId, note);
 }
 
 // O atendimento passou do horário (prorrogação ou início atrasado): empurra os próximos pedidos
@@ -835,6 +840,38 @@ route('POST', '/api/orders/:id/status', { auth: true }, (ctx) => {
   return [200, { order: orderView(db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(id), ctx.user) }];
 });
 
+// =====================================================================
+// NOTIFICAÇÕES (quem guarda e monta as notificações é o MICROSSERVIÇO da pasta notificacoes/;
+// aqui a API só confere quem está logado e repassa o pedido com o id dessa pessoa)
+// =====================================================================
+async function notif(method, pathname, body) {
+  try {
+    const r = await notificador.chamar(method, pathname, body);
+    if (r.status >= 400) fail(r.status === 401 ? 502 : r.status, r.data.error || 'Erro no serviço de notificações.');
+    return r.data;
+  } catch (e) {
+    if (e instanceof notificador.ServicoForaDoAr) fail(503, 'As notificações estão fora do ar agora. O resto do Biko continua funcionando normalmente.');
+    throw e;
+  }
+}
+const notifBase = (ctx) => `/usuarios/${ctx.user.id}/notificacoes`;
+
+route('GET', '/api/notificacoes', { auth: true }, async (ctx) => {
+  await notificador.flush().catch(() => {}); // entrega o que estiver pendente antes de listar
+  const qs = new URLSearchParams();
+  for (const k of ['limit', 'offset', 'nao_lidas']) if (ctx.query[k] !== undefined) qs.set(k, ctx.query[k]);
+  return [200, await notif('GET', `${notifBase(ctx)}${qs.size ? '?' + qs : ''}`)];
+});
+route('GET', '/api/notificacoes/contagem', { auth: true }, async (ctx) => {
+  await notificador.flush().catch(() => {});
+  return [200, await notif('GET', `${notifBase(ctx)}/contagem`)];
+});
+route('POST', '/api/notificacoes/lidas', { auth: true }, async (ctx) => [200, await notif('POST', `${notifBase(ctx)}/lidas`, {})]);
+route('POST', '/api/notificacoes/:id/lida', { auth: true }, async (ctx) => {
+  if (!/^\d+$/.test(ctx.params.id)) fail(404, 'Notificação não encontrada.');
+  return [200, await notif('POST', `${notifBase(ctx)}/${ctx.params.id}/lida`, {})];
+});
+
 // ---------- arquivos estáticos ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 function serveStatic(req, res, pathname) {
@@ -896,7 +933,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (matched.opts.auth) authenticate(ctx);
     if (matched.opts.roles && !matched.opts.roles.includes(ctx.user.role)) fail(403, 'Você não tem permissão para acessar este recurso.');
-    const [status, data, extra] = matched.handler(ctx);
+    const [status, data, extra] = await matched.handler(ctx); // algumas rotas (notificações) são assíncronas
     if (Buffer.isBuffer(data)) sendBinary(res, status, data, extra.contentType, ctx.headers);
     else send(res, status, data, ctx.headers);
   } catch (err) {
@@ -907,7 +944,11 @@ const server = http.createServer(async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+// Enquanto o servidor estiver no ar, a caixa de saída é entregue ao microsserviço a cada 2 s
+server.on('listening', () => notificador.iniciar());
+server.on('close', () => notificador.parar());
 if (require.main === module) {
   server.listen(PORT, () => console.log(`Biko rodando em http://localhost:${PORT}`));
 }
 module.exports = server;
+module.exports.notificador = notificador;

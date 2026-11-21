@@ -1,0 +1,13 @@
+{
+  "name": "biko-notificacoes",
+  "version": "1.0.0",
+  "description": "Biko - microsserviço de notificações (processo e banco próprios)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "test": "node --disable-warning=ExperimentalWarning test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
