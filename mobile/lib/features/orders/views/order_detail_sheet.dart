@@ -11,6 +11,7 @@ import '../../../data/remote/order_service.dart';
 import '../../../data/remote/payment_service.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../../shared/widgets/app_snackbar.dart';
+import '../../../shared/widgets/confirm_dialog.dart';
 import '../../../shared/widgets/app_ui.dart';
 import '../../../shared/widgets/state_views.dart';
 import '../../auth/viewmodels/session_view_model.dart';
@@ -81,9 +82,30 @@ class _OrderDetailState extends State<_OrderDetail> {
     super.dispose();
   }
 
+  /// O pedido começa daqui a mais de 30 min? Então "iniciar" é uma antecipação.
+  static bool _isEarly(OrderModel order) {
+    final d = order.date.split('-').map(int.parse).toList();
+    final m = Fmt.toMinutes(order.time);
+    final start = DateTime(d[0], d[1], d[2], m ~/ 60, m % 60);
+    return start.difference(DateTime.now()) > const Duration(minutes: 30);
+  }
+
   Future<void> _send(OrderAction action) async {
     final vm = context.read<OrderDetailViewModel>();
     final userId = context.read<SessionViewModel>().user?.id ?? 0;
+    final current = vm.order;
+    if (action == OrderAction.iniciar && current != null && _isEarly(current)) {
+      final ok = await showConfirmDialog(
+        context,
+        title: 'Antecipar o atendimento?',
+        message: 'Está marcado para ${Fmt.dateBR(current.date)} às ${current.time}. Se iniciar agora, o pedido passa a '
+            'começar neste momento (${Fmt.duration(current.durationMin)} de serviço), o horário antigo fica livre '
+            'na agenda e o cliente é avisado.',
+        confirmLabel: 'Iniciar agora',
+        cancelLabel: 'Voltar',
+      );
+      if (!ok || !mounted) return;
+    }
     if (vm.asksReason(action) && _pending == null) {
       setState(() {
         _pending = action;

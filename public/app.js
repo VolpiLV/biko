@@ -251,7 +251,7 @@ const toMin = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5))
 const STATUS_LABEL = { pendente: 'Pendente', confirmado: 'Confirmado', recusado: 'Recusado', concluido: 'Concluído', cancelado: 'Cancelado' };
 const CAT_ICON = { 'Telhado & Reparador': '🏠', Encanador: '🔧', Eletricista: '⚡', Pintor: '🎨', Limpeza: '🧹', Jardinagem: '🌿' };
 const ACTION_LABEL = { confirmar: 'Confirmar pedido', recusar: 'Recusar', atrasar: 'Avisar atraso / imprevisto', iniciar: 'Iniciar atendimento', estender: 'Preciso de mais tempo', concluir: 'Marcar como concluído', cancelar: 'Cancelar pedido' };
-const ACTION_DONE = { confirmar: 'Pedido confirmado.', recusar: 'Pedido recusado.', atrasar: 'Cliente avisado. O horário foi adiado.', iniciar: 'Atendimento iniciado.', estender: 'Tempo prorrogado. A agenda foi ajustada.', concluir: 'Pedido concluído.', cancelar: 'Pedido cancelado.' };
+const ACTION_DONE = { confirmar: 'Pedido confirmado.', recusar: 'Pedido recusado.', atrasar: 'Cliente avisado. O horário foi adiado.', iniciar: 'Atendimento iniciado. O cliente foi avisado.', estender: 'Tempo prorrogado. A agenda foi ajustada.', concluir: 'Pedido concluído.', cancelar: 'Pedido cancelado.' };
 // Eventos do histórico que não são status (agenda elástica)
 const EVENT_LABEL = { ...STATUS_LABEL, atrasado: 'Aviso de atraso', iniciado: 'Atendimento iniciado', prorrogado: 'Tempo prorrogado', remarcado: 'Horário remarcado', pago: 'Pagamento aprovado', estornado: 'Pagamento estornado' };
 const OPEN_MIN = 7 * 60, CLOSE_MIN = 20 * 60; // mesmo horário de atendimento do backend
@@ -645,8 +645,12 @@ async function orderModal(id) {
     </div>
     <div id="actionBox" class="stack">
       ${o.can_pay && !(o.payment && o.payment.status === 'aguardando') ? `<button type="button" class="btn pay" id="payBtn" style="margin-top:10px">💳 Pagar ${brl(o.price)}</button>` : ''}
-      ${o.actions.map((a) => `<button type="button" class="btn ${a === 'confirmar' || a === 'concluir' || a === 'iniciar' ? '' : a === 'recusar' || a === 'cancelar' ? 'danger' : 'secondary'}" data-act="${a}" style="margin-top:10px">${ACTION_LABEL[a]}</button>`).join('')}
+      ${o.actions.map((a) => `<button type="button" class="btn ${a === 'confirmar' || a === 'concluir' || a === 'iniciar' ? '' : a === 'recusar' || a === 'cancelar' ? 'danger' : 'secondary'}" data-act="${a}" style="margin-top:10px">${a === 'iniciar' && isEarly(o) ? 'Iniciar agora (antecipar)' : ACTION_LABEL[a]}</button>`).join('')}
       <button type="button" class="btn secondary" id="closeOrder" style="margin-top:10px">Fechar</button>
+    </div>
+    <div id="earlyBox" hidden>
+      <div class="notice warn" style="margin-top:12px">⏩ <b>Antecipar o atendimento?</b><br>Está marcado para ${dateBR(o.date)} às ${o.time}. Se iniciar agora, o pedido passa a começar neste momento (${fmtDur(o.duration_min)} de serviço), o horário antigo fica livre na agenda e o cliente é avisado.</div>
+      <div class="actions" style="margin-top:12px"><button type="button" class="btn secondary" id="earlyBack" style="margin:0">Voltar</button><button type="button" class="btn" id="earlyOk" style="margin:0">Iniciar agora</button></div>
     </div></div>`;
   $app.appendChild(ov);
   const close = () => ov.remove();
@@ -695,8 +699,20 @@ async function orderModal(id) {
       ov.querySelector('#reasonOk').onclick = () => send(a, ov.querySelector('#reason').value,
         timed ? Number(ov.querySelector('input[name="extMin"]:checked').value) : undefined);
       ov.querySelector('#reasonBack').onclick = () => { ov.querySelector('#reasonBox').hidden = true; ov.querySelector('#actionBox').hidden = false; };
+    } else if (a === 'iniciar' && isEarly(o)) {
+      // Mais de 30 min antes do horário: confirma a antecipação antes de enviar
+      ov.querySelector('#actionBox').hidden = true; ov.querySelector('#earlyBox').hidden = false;
+      ov.querySelector('#earlyBack').onclick = () => { ov.querySelector('#earlyBox').hidden = true; ov.querySelector('#actionBox').hidden = false; };
+      ov.querySelector('#earlyOk').onclick = () => send('iniciar');
     } else send(a);
   }));
+}
+
+// O pedido começa daqui a mais de 30 min? Então "iniciar" é uma antecipação.
+function isEarly(o) {
+  const [y, mo, d] = o.date.split('-').map(Number);
+  const start = new Date(y, mo - 1, d, toMin(o.time) / 60 | 0, toMin(o.time) % 60).getTime();
+  return start - Date.now() > 30 * 60000;
 }
 
 

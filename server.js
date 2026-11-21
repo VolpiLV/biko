@@ -553,7 +553,9 @@ const CLIENT_CANCEL_LIMIT_MS = 2 * 3600e3;      // cliente cancela pedido confir
 // Agenda elástica: a duração do serviço é o tempo NORMAL (sem "gordura"). Imprevistos são
 // tratados durante o atendimento: o prestador prorroga e os pedidos seguintes são remarcados;
 // se terminar antes, concluir libera o restante do horário na hora.
-const START_EARLY_MS = 30 * 60e3;               // pode iniciar até 30 min antes do horário
+const START_EARLY_MS = 30 * 60e3;               // até 30 min antes: começa "no horário" (a agenda não muda)
+// Mais cedo que isso o atendimento é ANTECIPADO: o pedido passa a começar agora e o horário
+// antigo fica livre na agenda (ex.: o prestador terminou outro serviço cedo e foi direto ao cliente).
 const EXTEND_STEPS = [15, 30, 45, 60];          // prorrogação em blocos de 15 min
 const MAX_EXTEND_MIN = 240;                     // no máximo 4 h a mais no total
 const HARD_CLOSE_HOUR = 22;                     // imprevisto pode passar das 20h, mas não das 22h
@@ -609,7 +611,7 @@ function availableActions(o, user, t = now()) {
     if (!a.from.includes(o.status)) continue;
     if (a.who === 'prestador' && !isProvider) continue;
     if (name === 'atrasar' && (o.started_ts || o.delay_min >= MAX_DELAY_MIN || t >= o.end_ts)) continue;
-    if (name === 'iniciar' && (o.started_ts || t < o.start_ts - START_EARLY_MS)) continue;
+    if (name === 'iniciar' && o.started_ts) continue;
     if (name === 'estender' && (!o.started_ts || o.extended_min >= MAX_EXTEND_MIN)) continue;
     if (name === 'concluir' && !o.started_ts && o.start_ts > t) continue;
     if (name === 'cancelar') {
@@ -804,9 +806,20 @@ route('POST', '/api/orders/:id/status', { auth: true }, async (ctx) => {
 
     if (action === 'iniciar') {
       if (o.started_ts) fail(409, 'Este atendimento já foi iniciado.');
-      if (t < o.start_ts - START_EARLY_MS) fail(400, 'Só é possível iniciar até 30 minutos antes do horário agendado.');
       const busy = db.prepare("SELECT id FROM orders WHERE provider_id = ? AND id != ? AND status = 'confirmado' AND started_ts IS NOT NULL").get(o.provider_id, o.id);
       if (busy) fail(409, 'Você já tem um atendimento em andamento. Conclua ele antes de iniciar outro.');
+      if (t < o.start_ts - START_EARLY_MS) {
+        // ANTECIPADO: o atendimento passa a ser de agora até agora + duração normal
+        const plannedMs = (o.planned_end_ts || o.end_ts) - o.start_ts;
+        const newStart = t, newEnd = t + plannedMs;
+        const clash = (col, uid) => db.prepare(`SELECT 1 FROM orders WHERE ${col} = ? AND id != ? AND status IN ('pendente','confirmado') AND start_ts < ? AND end_ts > ?`).get(uid, o.id, newEnd, newStart);
+        if (clash('provider_id', o.provider_id)) fail(409, 'Você tem outro pedido nesse intervalo. Não dá para antecipar este agora.');
+        if (clash('client_id', o.client_id)) fail(409, 'O cliente tem outro pedido nesse intervalo. Não dá para antecipar este agora.');
+        db.prepare('UPDATE orders SET started_ts = ?, start_ts = ?, end_ts = ?, planned_end_ts = ?, updated_at = ? WHERE id = ?').run(t, newStart, newEnd, newEnd, t, o.id);
+        const d = new Date(o.start_ts);
+        addEvent(o.id, 'iniciado', ctx.user.id, `Atendimento antecipado: estava marcado para ${pad(d.getDate())}/${pad(d.getMonth() + 1)} às ${fmtTime(o.start_ts)} e começou agora (previsão de término ${fmtTime(newEnd)}). O horário antigo ficou livre na agenda`);
+        return o.id;
+      }
       // Começou atrasado: o tempo do serviço conta a partir do início real, e quem vem depois é remarcado.
       const plannedMs = (o.planned_end_ts || o.end_ts) - o.start_ts;
       const newEnd = Math.max(o.end_ts, t + plannedMs);

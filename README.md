@@ -88,7 +88,7 @@ A duração cadastrada no serviço é o tempo **normal**, sem "gordura". Os impr
 | Ação | Quem | Regras |
 |------|------|--------|
 | avisar atraso ("Avisar atraso / imprevisto") | prestador | **antes** de iniciar (pedido pendente ou confirmado); +15, 30, 45 ou 60 min; motivo obrigatório (ex.: falta de luz, equipamento quebrado). Ex.: 11:00 vira 11:30. No máximo 4 h de atraso somado e nunca terminando depois das 22:00 |
-| iniciar | prestador | pedido confirmado, a partir de 30 min antes do horário; só um atendimento em andamento por vez. Se começar atrasado, o tempo do serviço conta a partir do início real |
+| iniciar | prestador | pedido confirmado, a qualquer momento; só um atendimento em andamento por vez. Até 30 min antes conta como "no horário". **Mais cedo que isso é antecipar**: pede confirmação, o pedido passa a começar na hora, o horário antigo fica livre e o cliente é avisado (recusado se bater com outro pedido do prestador ou do cliente). Se começar atrasado, o tempo do serviço conta a partir do início real |
 | estender ("Preciso de mais tempo") | prestador | só com o atendimento iniciado; +15, 30, 45 ou 60 min; motivo obrigatório; no máximo 4 h a mais e nunca depois das 22:00 |
 | concluir | prestador | pode concluir antes do fim previsto se já iniciou; o restante do horário é liberado na agenda na hora |
 

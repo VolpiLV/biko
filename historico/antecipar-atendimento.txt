@@ -1,0 +1,40 @@
+HISTORICO DE PENSAMENTOS - ANTECIPAR ATENDIMENTO
+================================================
+
+-------------------------------------------------------------------------
+O QUE FOI PEDIDO
+-------------------------------------------------------------------------
+
+  Deixar o prestador iniciar a atividade antes da data e hora marcadas.
+  Antes so dava para iniciar a partir de 30 min antes do horario, entao
+  nao tinha como testar o "Iniciar atendimento" no link de demonstracao.
+
+-------------------------------------------------------------------------
+RACIOCINIO
+-------------------------------------------------------------------------
+
+  - So liberar o botao nao basta: se o servico comeca hoje mas o pedido
+    continua marcado para daqui a 3 dias, a agenda fica mentindo (o
+    horario antigo segue ocupado e o "fim previsto" fica errado).
+  - Entao iniciar cedo vira ANTECIPAR: o pedido passa a comecar agora,
+    termina agora + a duracao normal, e o horario antigo fica livre.
+  - Pode bater com outro pedido (do prestador ou do cliente) nesse novo
+    intervalo. Nesse caso o sistema recusa e explica.
+  - O cliente precisa saber: entra no historico e vira notificacao
+    "Atendimento iniciado" com o texto do horario antigo.
+  - Ate 30 min antes continua como era (conta como "no horario").
+
+-------------------------------------------------------------------------
+COMO FICOU
+-------------------------------------------------------------------------
+
+  1. Pedido confirmado com mais de 30 min de antecedencia: o botao vira
+     "Iniciar agora (antecipar)".
+  2. Aparece uma confirmacao: "Esta marcado para DD/MM as HH:MM. Se
+     iniciar agora...". No app Flutter e um dialogo com o mesmo texto.
+  3. Confirmou: pedido "Em andamento", horario novo = agora, historico
+     "Atendimento antecipado: estava marcado para...", cliente notificado.
+  4. Dali para frente e igual: "Preciso de mais tempo" e "Concluir".
+
+  Testes: 1 teste novo (antecipar, conflito com outro pedido, concluir).
+  Todos passam (121 da API + 10 + 10 dos microsservicos).
