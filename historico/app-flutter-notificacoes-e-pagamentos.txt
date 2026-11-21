@@ -1,0 +1,59 @@
+HISTORICO DE PENSAMENTOS - APP FLUTTER: NOTIFICACOES E PAGAMENTOS
+=================================================================
+
+-------------------------------------------------------------------------
+O QUE FOI PEDIDO
+-------------------------------------------------------------------------
+
+  Levar os dois microsservicos (notificacoes e pagamentos) tambem para o
+  app Flutter (pasta mobile).
+
+-------------------------------------------------------------------------
+RACIOCINIO
+-------------------------------------------------------------------------
+
+  - O app ja segue MVVM (Service -> ViewModel -> View). Entao cada
+    microsservico ganhou um Service (so chama a API principal, nunca o
+    microsservico direto), um ViewModel e as telas.
+  - O app nao precisa saber que existem microsservicos: ele fala so com a
+    API principal (porta 3000), igual ao site.
+  - A API devolve 503 quando um microsservico esta fora do ar. Antes o
+    app trocava todo erro 5xx por "erro no servidor"; agora o 503 mostra
+    a mensagem da API ("O pagamento esta fora do ar agora..."), que ja e
+    escrita para o usuario.
+
+-------------------------------------------------------------------------
+O QUE MUDOU NO APP
+-------------------------------------------------------------------------
+
+  Notificacoes
+  - Sino na barra de cima com o numero de nao lidas (atualiza a cada 20 s).
+  - Historico de notificacoes: NOME DA ACAO em destaque + mensagem, sem
+    data. Nao lidas ficam azuladas com ponto laranja.
+  - Tocar abre o pedido. "Marcar todas como lidas".
+
+  Pagamentos (simulado)
+  - Botao laranja "Pagar R$ ..." no pedido confirmado (so o cliente).
+  - Pix: QR de demonstracao, copia e cola com botao copiar, contagem de
+    30 min e "Simular pagamento recebido (demo)".
+  - Cartao: cartao desenhado que se preenche ao digitar, parcelas 1x a 3x.
+    4242 4242 4242 4242 aprova; final 0002 recusa. So os 4 ultimos
+    digitos saem do aparelho.
+  - Comprovante depois de aprovar, selo "Pago" na lista de pedidos e
+    botao "Ver comprovante" no detalhe.
+  - Aba nova: "Pagamentos" (cliente) e "Vendas" (prestador e admin), com
+    total, taxa Biko de 10% e liquido.
+
+  Arquivos novos: data/models/notification_model.dart,
+  data/models/payment_models.dart, data/remote/notification_service.dart,
+  data/remote/payment_service.dart, features/notifications/,
+  features/payments/, test/data/payment_models_test.dart.
+
+-------------------------------------------------------------------------
+PENDENTE
+-------------------------------------------------------------------------
+
+  - Rodar "flutter analyze" e "flutter test" na maquina (o Flutter nao
+    estava disponivel no ambiente onde o codigo foi escrito, entao o app
+    ainda nao foi compilado). Se aparecer algum erro, e so mandar o
+    texto do erro.

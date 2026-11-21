@@ -11,7 +11,9 @@ import 'data/local/token_storage.dart';
 import 'data/remote/admin_service.dart';
 import 'data/remote/auth_service.dart';
 import 'data/remote/catalog_service.dart';
+import 'data/remote/notification_service.dart';
 import 'data/remote/order_service.dart';
+import 'data/remote/payment_service.dart';
 import 'data/remote/profile_service.dart';
 import 'data/repositories/auth_repository.dart';
 import 'features/auth/viewmodels/session_view_model.dart';
@@ -40,6 +42,9 @@ Future<void> main() async {
         Provider<OrderService>.value(value: OrderService(api)),
         Provider<AdminService>.value(value: AdminService(api)),
         Provider<ProfileService>.value(value: ProfileService(api)),
+        // microsserviços (a API principal repassa as chamadas)
+        Provider<NotificationService>.value(value: NotificationService(api)),
+        Provider<PaymentService>.value(value: PaymentService(api)),
         ChangeNotifierProvider<SessionViewModel>.value(value: session),
         ChangeNotifierProvider<ThemeViewModel>(
           create: (_) => ThemeViewModel(preferences),

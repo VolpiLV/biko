@@ -174,5 +174,5 @@ test.js                  12 testes novos
 
 ## Próximos passos possíveis
 
-- Mostrar o sino também no app Flutter (pasta `mobile/`), usando as mesmas rotas `/api/notificacoes`.
+- ~~Mostrar o sino também no app Flutter~~ — feito: o app (pasta `mobile/`) já tem o sino e o histórico de notificações.
 - Mandar e-mail ou push além da notificação dentro do app: só o microsserviço muda.

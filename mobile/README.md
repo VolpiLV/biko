@@ -30,7 +30,7 @@ Em `android/app/src/main/AndroidManifest.xml`:
 
 ## Rodando
 
-1. Suba o backend na pasta acima: `npm start` (porta 3000).
+1. Suba o backend na pasta acima: `npm run tudo` (API na porta 3000 + microsserviços de notificações e pagamentos). Só `npm start` também funciona, mas aí o sino e o botão Pagar ficam fora do ar.
 2. Rode o app:
 
 ```bash
@@ -84,8 +84,22 @@ Abas da `/home`, as mesmas do sistema web:
 | Buscar | Texto, categoria, preço máximo, ordenação e agendamento com horários livres | — | — |
 | Serviços | — | Criar, editar e ativar/desativar serviços | — |
 | Usuários | — | — | Busca, filtros, criar, editar e desativar contas |
-| Pedidos | Detalhe, histórico e cancelar | Confirmar, recusar (com motivo), concluir e cancelar | Todos os pedidos, cancelar |
+| Pedidos | Detalhe, histórico, cancelar e **Pagar** (Pix ou cartão, simulado) com comprovante | Confirmar, recusar (com motivo), concluir e cancelar | Todos os pedidos, cancelar |
+| Pagamentos / Vendas | **Pagamentos**: total pago e comprovantes | **Vendas**: total vendido, taxa Biko (10%) e quanto recebe | **Vendas**: tudo da plataforma |
 | Conta | Foto, meus dados, alterar senha, tema e sair | igual | igual |
+
+Na barra de cima tem o **sino 🔔** com o número de notificações não lidas (atualiza a cada 20 s). O histórico mostra o **nome da ação** (ex.: "Pedido confirmado", "Pagamento recebido") e a mensagem, sem data; tocar abre o pedido.
+
+### Microsserviços no app
+
+| Arquivo | O que faz |
+|---|---|
+| `data/remote/notification_service.dart` | `/api/notificacoes` (lista, contagem, marcar lida) |
+| `features/notifications/` | `NotificationsViewModel` (contador + histórico), sino e folha de notificações |
+| `data/remote/payment_service.dart` | `/api/orders/:id/pagamento` e `/api/pagamentos` |
+| `features/payments/` | folha de pagamento (Pix com QR de demonstração e cartão), comprovante e aba Vendas/Pagamentos |
+
+O pagamento é **simulado** (apresentação do TCC): nada é cobrado. No cartão, `4242 4242 4242 4242` aprova e um final `0002` é recusado. Só os 4 últimos dígitos saem do aparelho; o número inteiro e o CVV não são enviados nem guardados. Se um microsserviço estiver fora do ar, a API responde 503 e o app mostra a mensagem dela (ex.: "O pagamento está fora do ar agora…"); o resto continua funcionando.
 
 ## Usuários de teste
 

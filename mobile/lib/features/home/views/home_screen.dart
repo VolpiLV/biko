@@ -5,15 +5,21 @@ import '../../../data/models/user_model.dart';
 import '../../../data/models/user_role.dart';
 import '../../../data/remote/admin_service.dart';
 import '../../../data/remote/catalog_service.dart';
+import '../../../data/remote/notification_service.dart';
 import '../../../data/remote/order_service.dart';
+import '../../../data/remote/payment_service.dart';
 import '../../../shared/widgets/state_views.dart';
 import '../../../shared/widgets/user_avatar.dart';
 import '../../account/views/account_tab.dart';
 import '../../admin/viewmodels/users_view_model.dart';
 import '../../admin/views/users_tab.dart';
 import '../../auth/viewmodels/session_view_model.dart';
+import '../../notifications/viewmodels/notifications_view_model.dart';
+import '../../notifications/widgets/notification_bell.dart';
 import '../../orders/viewmodels/orders_view_model.dart';
 import '../../orders/views/orders_tab.dart';
+import '../../payments/viewmodels/sales_view_model.dart';
+import '../../payments/views/sales_tab.dart';
 import '../../search/viewmodels/search_view_model.dart';
 import '../../search/views/search_tab.dart';
 import '../../services/viewmodels/my_services_view_model.dart';
@@ -37,6 +43,8 @@ class HomeScreen extends StatelessWidget {
     final catalog = context.read<CatalogService>();
     final orders = context.read<OrderService>();
     final admin = context.read<AdminService>();
+    final notifications = context.read<NotificationService>();
+    final payments = context.read<PaymentService>();
 
     return MultiProvider(
       // Outro usuário (ou perfil alterado) = estado novo.
@@ -50,6 +58,8 @@ class HomeScreen extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => SearchViewModel(catalog)),
         ChangeNotifierProvider(create: (_) => MyServicesViewModel(catalog)),
         ChangeNotifierProvider(create: (_) => UsersViewModel(admin)),
+        ChangeNotifierProvider(create: (_) => NotificationsViewModel(notifications)),
+        ChangeNotifierProvider(create: (_) => SalesViewModel(payments)),
       ],
       child: _HomeShell(user: user),
     );
@@ -73,6 +83,7 @@ class _HomeShell extends StatelessWidget {
         AppTab.services => const ServicesTab(),
         AppTab.users => const UsersTab(),
         AppTab.orders => OrdersTab(role: user.role),
+        AppTab.payments || AppTab.sales => SalesTab(role: user.role),
         AppTab.account => const AccountTab(),
       };
 
@@ -96,6 +107,7 @@ class _HomeShell extends StatelessWidget {
           ],
         ),
         actions: [
+          const NotificationBell(),
           const ThemeModeButton(),
           Padding(
             padding: const EdgeInsets.only(right: 12, left: 4),

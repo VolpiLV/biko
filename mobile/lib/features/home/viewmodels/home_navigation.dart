@@ -10,6 +10,9 @@ enum AppTab {
   services('Serviços', Icons.handyman_outlined, Icons.handyman),
   users('Usuários', Icons.group_outlined, Icons.group),
   orders('Pedidos', Icons.event_note_outlined, Icons.event_note),
+  // pagamento simulado: o cliente vê "Pagamentos", prestador e admin veem "Vendas"
+  payments('Pagamentos', Icons.credit_card_outlined, Icons.credit_card),
+  sales('Vendas', Icons.payments_outlined, Icons.payments),
   account('Conta', Icons.person_outline, Icons.person);
 
   const AppTab(this.label, this.icon, this.selectedIcon);
@@ -20,9 +23,9 @@ enum AppTab {
 
   /// Cada perfil vê só as abas que pode usar (o backend também bloqueia).
   static List<AppTab> forRole(UserRole role) => switch (role) {
-        UserRole.cliente => const [home, search, orders, account],
-        UserRole.prestador => const [home, services, orders, account],
-        UserRole.admin => const [home, users, orders, account],
+        UserRole.cliente => const [home, search, orders, payments, account],
+        UserRole.prestador => const [home, services, orders, sales, account],
+        UserRole.admin => const [home, users, orders, sales, account],
       };
 }
 

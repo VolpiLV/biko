@@ -66,8 +66,9 @@ AppException _fromResponse(Response<Object?>? response) {
     _ => AppErrorKind.unknown,
   };
 
-  // Mensagens 4xx da API já são escritas para o usuário final; 5xx nunca são exibidas.
-  final message = kind == AppErrorKind.server
+  // Mensagens 4xx da API já são escritas para o usuário final; 5xx nunca são exibidas,
+  // menos o 503, que a API usa para "microsserviço fora do ar" (texto já pensado para o usuário).
+  final message = kind == AppErrorKind.server && !(status == 503 && serverMessage != null)
       ? _serverMessage
       : serverMessage ?? 'Não foi possível concluir a operação.';
   return AppException(kind, message, fields: fields, statusCode: status);

@@ -66,5 +66,5 @@ COMO RODAR
 PENDENTE
 -------------------------------------------------------------------------
 
-  - O app Flutter (pasta mobile) ainda nao mostra o sino. As rotas
-    /api/notificacoes ja estao prontas para ele usar.
+  - (Resolvido em app-flutter-notificacoes-e-pagamentos.txt: o app
+    Flutter tambem tem o sino agora.)

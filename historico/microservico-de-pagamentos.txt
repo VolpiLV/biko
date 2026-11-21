@@ -62,6 +62,5 @@ COMO RODAR
 PENDENTE
 -------------------------------------------------------------------------
 
-  - App Flutter (pasta mobile) ainda sem as telas de pagamento e o sino.
-    So foram adicionados os nomes "Pagamento aprovado" e "Pagamento
-    estornado" no historico do pedido, para o app nao mostrar o codigo.
+  - (Resolvido em app-flutter-notificacoes-e-pagamentos.txt: o app
+    Flutter tambem tem o pagamento e a aba Vendas agora.)

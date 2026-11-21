@@ -127,6 +127,8 @@ class OrderModel {
     this.originalTime,
     this.delayReason,
     this.realDurationMin,
+    this.payment,
+    this.canPay = false,
   });
 
   final int id;
@@ -168,6 +170,16 @@ class OrderModel {
 
   /// Motivo do atraso que o cliente vê (ex.: "Falta de luz").
   final String? delayReason;
+
+  // ---- pagamento (simulado) ----
+  /// null = ainda não houve tentativa de pagamento.
+  final OrderPayment? payment;
+
+  /// O usuário logado é o cliente e o pedido está pronto para pagar.
+  final bool canPay;
+
+  bool get isPaid => payment?.status == PaymentStatus.pago;
+  bool get awaitingPix => payment?.status == PaymentStatus.aguardando;
   final int? realDurationMin;
 
   factory OrderModel.fromJson(Map<String, dynamic> json) {
@@ -200,6 +212,46 @@ class OrderModel {
       originalTime: readStringOrNull(json, 'original_time'),
       delayReason: readStringOrNull(json, 'delay_reason'),
       realDurationMin: readNumOrNull(json, 'real_duration_min')?.round(),
+      payment: json['payment'] is Map<String, dynamic> ? OrderPayment.fromJson(readMap(json, 'payment')) : null,
+      canPay: json['can_pay'] == true,
     );
   }
+}
+
+/// Situação do pagamento guardada no pedido (o detalhe completo fica no microsserviço).
+enum PaymentStatus {
+  aguardando('aguardando', 'Aguardando Pix'),
+  pago('pago', 'Pago'),
+  recusado('recusado', 'Recusado'),
+  expirado('expirado', 'Expirado'),
+  estornoPendente('estorno_pendente', 'Estorno em andamento'),
+  estornado('estornado', 'Estornado'),
+  outro('', 'Pagamento');
+
+  const PaymentStatus(this.apiValue, this.label);
+
+  final String apiValue;
+  final String label;
+
+  /// Valor novo no backend não quebra o app: vira [outro].
+  static PaymentStatus fromApi(Object? value) {
+    for (final s in PaymentStatus.values) {
+      if (s.apiValue == value) return s;
+    }
+    return outro;
+  }
+}
+
+class OrderPayment {
+  const OrderPayment({required this.status, this.code});
+
+  final PaymentStatus status;
+
+  /// Código da transação (ex.: BKP-7F3A9C21).
+  final String? code;
+
+  factory OrderPayment.fromJson(Map<String, dynamic> json) => OrderPayment(
+        status: PaymentStatus.fromApi(json['status']),
+        code: readStringOrNull(json, 'code'),
+      );
 }

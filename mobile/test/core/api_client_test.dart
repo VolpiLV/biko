@@ -135,6 +135,20 @@ void main() {
     );
   });
 
+  test('503 (microsserviço fora do ar) mostra a mensagem da API', () async {
+    final (:client, adapter: _) = _clientReturning(503, {
+      'error': 'As notificações estão fora do ar agora. O resto do Biko continua funcionando normalmente.',
+    });
+    await expectLater(
+      client.get('/api/notificacoes', _identity),
+      throwsA(
+        isA<AppException>()
+            .having((e) => e.kind, 'kind', AppErrorKind.server)
+            .having((e) => e.message, 'message', contains('fora do ar')),
+      ),
+    );
+  });
+
   test('JSON inválido vira erro amigável', () async {
     final (:client, adapter: _) = _clientReturning(200, '{isso não é json');
     await expectLater(

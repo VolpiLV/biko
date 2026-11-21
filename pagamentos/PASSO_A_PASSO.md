@@ -102,6 +102,10 @@ Se um pedido **pago** for cancelado (pelo prestador ou pelo admin):
 
 O botão Pagar responde: "O pagamento está fora do ar agora. Tente de novo em instantes; o pedido continua valendo." Pedidos, busca, agenda e notificações continuam funcionando.
 
+## No app Flutter
+
+O app (pasta `mobile/`) tem o mesmo fluxo: botão laranja **Pagar** no detalhe do pedido, folha de pagamento com Pix (QR de demonstração, copiar código, contagem e "Simular pagamento recebido") ou cartão (cartão desenhado, parcelas 1x–3x), comprovante, selo **✓ Pago** na lista e aba **Pagamentos** (cliente) / **Vendas** (prestador e admin). Também só manda os 4 últimos dígitos do cartão.
+
 ## Rotas do microsserviço (uso interno, só a API principal chama)
 
 Todas pedem `X-Service-Key` (menos `/saude`). Ele só escuta em `127.0.0.1`.

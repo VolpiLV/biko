@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../core/errors/app_exception.dart';
 import '../../../core/theme/app_tokens.dart';
 import '../../../core/theme/biko_colors.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/order_model.dart';
+import '../../../data/models/user_role.dart';
 import '../../../data/remote/order_service.dart';
+import '../../../data/remote/payment_service.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../../shared/widgets/app_snackbar.dart';
 import '../../../shared/widgets/app_ui.dart';
 import '../../../shared/widgets/state_views.dart';
 import '../../auth/viewmodels/session_view_model.dart';
+import '../../payments/views/payment_sheet.dart';
+import '../../payments/views/receipt_sheet.dart';
+import '../../payments/widgets/payment_widgets.dart';
 import '../viewmodels/orders_view_model.dart';
 
 /// Abre o detalhe do pedido. Retorna true se o status mudou (a lista recarrega).
@@ -43,6 +49,31 @@ class _OrderDetailState extends State<_OrderDetail> {
   /// Minutos escolhidos em "Preciso de mais tempo" ou "Avisar atraso".
   int _extraMin = 15;
   static const _extraSteps = [15, 30, 45, 60];
+
+  /// Pagou (ou começou a pagar) por aqui: a lista de pedidos recarrega ao fechar.
+  bool _changed = false;
+
+  /// Pagamento (simulado). Depois de aprovado mostra o comprovante.
+  Future<void> _pay(OrderModel order) async {
+    final vm = context.read<OrderDetailViewModel>();
+    final charge = await showPaymentSheet(context, order);
+    if (!mounted) return;
+    _changed = true;
+    await vm.load(); // mostra o selo "Pago" (ou "Aguardando Pix") na hora
+    if (!mounted || charge == null) return;
+    await showReceiptSheet(context, charge, justPaid: true);
+  }
+
+  Future<void> _receipt(OrderModel order) async {
+    final seller = context.read<SessionViewModel>().user?.role != UserRole.cliente;
+    try {
+      final charge = await context.read<PaymentService>().ofOrder(order.id);
+      if (!mounted || charge == null) return;
+      await showReceiptSheet(context, charge, seller: seller);
+    } on AppException catch (e) {
+      if (mounted) showAppSnackBar(context, e.message, error: true);
+    }
+  }
 
   @override
   void dispose() {
@@ -146,6 +177,26 @@ class _OrderDetailState extends State<_OrderDetail> {
           ),
         if (order.realDurationMin case final real?) InfoRow(label: 'Tempo real', value: Fmt.duration(real)),
         InfoRow(label: 'Valor', value: Fmt.brl(order.price)),
+        if (order.payment case final p? when p.status != PaymentStatus.recusado)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 110,
+                  child: Text(
+                    'Pagamento',
+                    style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ),
+                PaymentPill(status: p.status),
+                if (p.code case final code?) ...[
+                  const SizedBox(width: AppSpacing.sm),
+                  Flexible(child: Text(code, style: theme.textTheme.bodySmall)),
+                ],
+              ],
+            ),
+          ),
         InfoRow(label: 'Endereço', value: order.address),
         if (order.notes case final notes? when notes.isNotEmpty) InfoRow(label: 'Observações', value: notes),
         InfoRow(label: 'Cliente', value: order.client.name, extra: order.client.phone),
@@ -220,6 +271,32 @@ class _OrderDetailState extends State<_OrderDetail> {
             onSubmit: () => _send(action),
           ),
         ] else ...[
+          if (order.canPay)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.brandOrange,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: vm.loading ? null : () => _pay(order),
+                  icon: const Icon(Icons.payments_outlined),
+                  label: Text(order.awaitingPix ? 'Continuar pagamento (Pix)' : 'Pagar ${Fmt.brl(order.price)}'),
+                ),
+              ),
+            ),
+          if (order.payment case final p?
+              when p.status != PaymentStatus.recusado && !(order.awaitingPix && order.canPay))
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: AppButton(
+                label: 'Ver comprovante',
+                variant: AppButtonVariant.secondary,
+                onPressed: () => _receipt(order),
+              ),
+            ),
           for (final action in order.actions)
             Padding(
               padding: const EdgeInsets.only(bottom: AppSpacing.sm),
@@ -237,7 +314,7 @@ class _OrderDetailState extends State<_OrderDetail> {
           AppButton(
             label: 'Fechar',
             variant: AppButtonVariant.secondary,
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.of(context).pop(_changed),
           ),
         ],
       ],

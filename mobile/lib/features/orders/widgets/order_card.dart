@@ -6,6 +6,7 @@ import '../../../core/utils/formatters.dart';
 import '../../../data/models/order_model.dart';
 import '../../../data/models/user_role.dart';
 import '../../../shared/widgets/app_ui.dart';
+import '../../payments/widgets/payment_widgets.dart';
 
 /// Cartão de pedido na lista. Mostra "a outra pessoa" conforme o perfil.
 class OrderCard extends StatelessWidget {
@@ -72,6 +73,10 @@ class OrderCard extends StatelessWidget {
                     StatusBadge(status: order.status),
                   const SizedBox(height: AppSpacing.sm),
                   Text(Fmt.brl(order.price), style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                  if (order.payment case final p? when p.status != PaymentStatus.recusado) ...[
+                    const SizedBox(height: AppSpacing.xs),
+                    PaymentPill(status: p.status),
+                  ],
                 ],
               ),
             ],
