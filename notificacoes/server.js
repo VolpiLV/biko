@@ -23,6 +23,8 @@ const ACOES = {
   atrasado:   { titulo: 'Aviso de atraso',      para: 'cliente',   texto: (e) => `${e.ator_nome || 'O prestador'} avisou um imprevisto em "${e.pedido.servico}". ${e.nota || ''}`.trim() },
   iniciado:   { titulo: 'Atendimento iniciado', para: 'cliente',   texto: (e) => `${e.ator_nome || 'O prestador'} começou o atendimento de "${e.pedido.servico}".` },
   prorrogado: { titulo: 'Tempo prorrogado',     para: 'cliente',   texto: (e) => `${e.ator_nome || 'O prestador'} precisou de mais tempo em "${e.pedido.servico}": ${e.nota || ''}`.trim() },
+  pago:       { titulo: 'Pagamento recebido',   para: 'prestador', texto: (e) => `${e.ator_nome || 'O cliente'} pagou "${e.pedido.servico}". ${e.nota || ''}`.trim() },
+  estornado:  { titulo: 'Pagamento estornado',  para: 'outros',    texto: (e) => `O pagamento de "${e.pedido.servico}" foi devolvido ao cliente. ${e.nota || ''}`.trim() },
   remarcado:  { titulo: 'Horário remarcado',    para: 'cliente',   texto: (e) => `"${e.pedido.servico}" mudou de horário por um imprevisto no atendimento anterior. ${e.nota || ''}`.trim() },
 };
 const dataBR = (d) => String(d || '').split('-').reverse().join('/');

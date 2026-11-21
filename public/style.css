@@ -253,3 +253,34 @@ textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-sof
 .notif-ico { font-size: 18px; line-height: 1.2; }
 .notif b { display: block; font-size: 14px; }
 .notif small { display: block; margin-top: 2px; font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+
+/* ---------- pagamentos / vendas (simulado) ---------- */
+.btn.pay { background: var(--orange); }
+.btn.pay:hover { background: #ec7a10; }
+.pay-badge { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #eef1f6; color: var(--muted); white-space: nowrap; }
+.right .pay-badge { margin-left: 0; }
+.pay-badge.pb-pago, .pay-badge.pb-aprovado { background: #e7f6ee; color: var(--ok); }
+.pay-badge.pb-aguardando { background: #fff6dd; color: #9a6a00; }
+.pay-badge.pb-estornado, .pay-badge.pb-estorno_pendente { background: #efe7fe; color: #6a3fd1; }
+.pay-badge.pb-recusado, .pay-badge.pb-expirado { background: #fdecec; color: var(--danger); }
+.demo-note { margin: 10px 0; padding: 8px 12px; border-radius: 10px; background: #f3f0ff; color: #5a3fb5; font-size: 12px; line-height: 1.35; }
+.demo-note.pad-x { margin: 14px 20px 0; }
+.pix-box { display: grid; justify-items: center; gap: 8px; margin: 6px 0 14px; text-align: center; }
+.pix-box small { color: var(--muted); font-size: 12px; }
+.qr { width: 190px; height: 190px; border: 1px solid var(--line); border-radius: 12px; shape-rendering: crispEdges; }
+.pix-code { width: 100%; max-height: 64px; overflow: auto; padding: 8px 10px; border: 1px dashed #c4dcfb; border-radius: 10px; background: var(--blue-soft); text-align: left; }
+.pix-code code { font-size: 11px; word-break: break-all; color: #164a96; }
+.pix-timer { font-size: 13px; color: var(--muted); }
+.card-preview { margin: 6px 0 12px; padding: 16px; border-radius: 16px; color: #fff; background: linear-gradient(135deg, var(--blue) 0%, #0b3f8f 100%); display: grid; gap: 10px; min-height: 120px; box-shadow: 0 8px 18px rgba(22,119,242,.25); }
+.card-preview span { font-size: 12px; font-weight: 700; opacity: .9; text-align: right; }
+.card-preview b { font-size: 18px; letter-spacing: 2px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.card-preview small { font-size: 12px; letter-spacing: 1px; opacity: .9; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.receipt-head { text-align: center; padding: 6px 0 10px; }
+.receipt-ico { width: 56px; height: 56px; margin: 0 auto 8px; border-radius: 50%; display: grid; place-items: center; font-size: 28px; font-weight: 700; color: #fff; background: var(--ok); }
+.receipt-head.estornado .receipt-ico { background: #6a3fd1; }
+.receipt-head.aguardando .receipt-ico { background: #e8a800; }
+.receipt-head.recusado .receipt-ico, .receipt-head.expirado .receipt-ico { background: var(--danger); }
+.receipt-head h3 { margin: 0; }
+.receipt-value { display: block; font-size: 26px; margin-top: 4px; }
+.nav button { min-width: 0; font-size: 11px; }

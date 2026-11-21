@@ -9,6 +9,7 @@ Atividade avaliativa. Esta versão cobre tudo da tabela de requisitos, menos pag
 5. **Agendamento / pedidos / reservas** (com regras de negócio)
 6. **Busca** funcional sobre os dados reais
 7. **Microsserviço de notificações** (processo e banco próprios) — passo a passo em [`notificacoes/PASSO_A_PASSO.md`](notificacoes/PASSO_A_PASSO.md)
+8. **Microsserviço de pagamentos / vendas** (**simulado**, para a apresentação do TCC) — passo a passo em [`pagamentos/PASSO_A_PASSO.md`](pagamentos/PASSO_A_PASSO.md)
 
 O visual segue o protótipo (azul Biko, laranja de destaque, layout de celular).
 
@@ -17,16 +18,16 @@ O visual segue o protótipo (azul Biko, laranja de destaque, layout de celular).
 Precisa do **Node.js 22.13 ou mais novo** (https://nodejs.org). Não tem `npm install`: o projeto não usa nenhuma biblioteca externa.
 
 ```bash
-npm run tudo          # sobe a API (porta 3000) e o microsserviço de notificações (porta 3001)
+npm run tudo          # sobe a API (3000), as notificações (3001) e os pagamentos (3002)
 ```
 
-Ou em dois terminais: `npm run notificacoes` e `npm start`. A API funciona mesmo sem o microsserviço; só o sino de notificações fica fora do ar.
+Ou em três terminais: `npm run notificacoes`, `npm run pagamentos` e `npm start`. A API funciona mesmo sem os microsserviços; só o sino ou o botão Pagar ficam fora do ar.
 
 Abra http://localhost:3000. O banco `biko.db` é criado sozinho na primeira vez, já com usuários, serviços e pedidos de exemplo.
 
 Para zerar tudo, pare o servidor e apague os arquivos `biko.db*`.
 
-Testes automatizados (111 da API + 10 do microsserviço; usam bancos temporários e não mexem no `biko.db`):
+Testes automatizados (120 da API + 10 de cada microsserviço; usam bancos temporários e não mexem no `biko.db`):
 
 ```bash
 npm test
@@ -122,16 +123,34 @@ Cada ação num pedido (novo pedido, confirmar, recusar, cancelar, aviso de atra
 
 Detalhes, diagrama e roteiro de apresentação: [`notificacoes/PASSO_A_PASSO.md`](notificacoes/PASSO_A_PASSO.md).
 
+## 8 — Microsserviço de pagamentos / vendas (simulado)
+
+> Simulação para a apresentação do TCC: nada é cobrado e nenhum banco é chamado.
+
+- Depois que o prestador confirma, o cliente vê o botão **Pagar** no pedido: **Pix** (QR e copia e cola de demonstração, botão "Simular pagamento") ou **cartão** (1x a 3x; `4242 4242 4242 4242` aprova, final `0002` recusa). Só o final do cartão sai do navegador.
+- Pagamento aprovado: selo **Pago** no pedido, registro no histórico, **comprovante** e notificação "Pagamento recebido" para o prestador.
+- Taxa da plataforma de 10%. Abas **Pagamentos** (cliente) e **Vendas** (prestador/admin) com total, taxa e líquido.
+- Pedido pago e cancelado é **estornado** automaticamente.
+- Processo separado (`pagamentos/`, porta 3002) com banco próprio (`pagamentos.db`).
+
+Detalhes e roteiro de apresentação: [`pagamentos/PASSO_A_PASSO.md`](pagamentos/PASSO_A_PASSO.md).
+
 ## Estrutura
 
 ```
 biko/
 ├── server.js        # servidor HTTP + rotas da API + regras de acesso e de negócio
 ├── db.js            # SQLite (node:sqlite): tabelas, migração, hash de senha, dados de exemplo
-├── test.js          # testes automatizados do backend (111)
+├── test.js          # testes automatizados do backend (120)
+├── servicos.js      # chamada HTTP comum aos microsserviços
 ├── notificador.js   # ponte com o microsserviço: caixa de saída, reenvio e consulta
 ├── iniciar.js       # "npm run tudo": sobe os dois processos
 ├── notificacoes/    # MICROSSERVIÇO de notificações (porta 3001, banco notificacoes.db)
+│   ├── server.js
+│   ├── db.js
+│   ├── test.js
+│   └── PASSO_A_PASSO.md
+├── pagamentos/      # MICROSSERVIÇO de pagamentos SIMULADO (porta 3002, banco pagamentos.db)
 │   ├── server.js
 │   ├── db.js
 │   ├── test.js
@@ -143,7 +162,7 @@ biko/
     └── app.js       # telas: login, cadastro, recuperação, início, busca, pedidos, serviços, conta, usuários
 ```
 
-Tabelas: `users`, `sessions`, `password_resets`, `user_photos`, `services`, `orders`, `order_events`, `notification_outbox`. O microsserviço tem a sua: `notificacoes`.
+Tabelas: `users`, `sessions`, `password_resets`, `user_photos`, `services`, `orders`, `order_events`, `notification_outbox`. Os microsserviços têm as suas: `notificacoes` e `cobrancas`.
 
 ## Rotas da API
 
@@ -180,9 +199,13 @@ Tabelas: `users`, `sessions`, `password_resets`, `user_photos`, `services`, `ord
 | GET    | /api/notificacoes/contagem    | logado                 |
 | POST   | /api/notificacoes/:id/lida    | logado (só as próprias) |
 | POST   | /api/notificacoes/lidas       | logado                 |
+| POST   | /api/orders/:id/pagamento     | cliente do pedido      |
+| POST   | /api/orders/:id/pagamento/confirmar | cliente do pedido (simular Pix) |
+| GET    | /api/orders/:id/pagamento     | participantes e admin  |
+| GET    | /api/pagamentos               | logado (cada um vê o seu; admin vê tudo) |
 
 ## Observações
 
 - Datas e horários dos pedidos usam o fuso do computador onde o servidor roda.
 - Na recuperação de senha o código aparece na tela e no console (modo demonstração); em produção iria por e-mail.
-- **Fora do escopo**: pagamentos e chat (item 7 da tabela original) e avaliações dos prestadores (a "Avaliação" do painel fica em "—").
+- **Fora do escopo**: chat, pagamento real (o de agora é simulado) e avaliações dos prestadores (a "Avaliação" do painel fica em "—").

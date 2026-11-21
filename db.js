@@ -104,6 +104,12 @@ if (!orderCols.includes('delay_min')) db.exec('ALTER TABLE orders ADD COLUMN del
 // Aviso de atraso: o último motivo que o cliente precisa ver (ex.: "Acabou a energia").
 if (!orderCols.includes('delay_reason')) db.exec('ALTER TABLE orders ADD COLUMN delay_reason TEXT');
 
+// Pagamento (o microsserviço de pagamentos é a fonte da verdade; aqui fica só uma cópia do
+// status para mostrar o selo "Pago" nas listas sem perguntar ao microsserviço pedido por pedido).
+if (!orderCols.includes('payment_status')) db.exec('ALTER TABLE orders ADD COLUMN payment_status TEXT');
+if (!orderCols.includes('payment_id')) db.exec('ALTER TABLE orders ADD COLUMN payment_id INTEGER');
+if (!orderCols.includes('payment_code')) db.exec('ALTER TABLE orders ADD COLUMN payment_code TEXT');
+
 // Caixa de saída das notificações (padrão "outbox"): o evento é gravado NA MESMA transação
 // que muda o pedido. Depois o notificador.js entrega para o microsserviço de notificações.
 // Se o microsserviço estiver fora do ar, nada se perde: o evento espera aqui e é reenviado.

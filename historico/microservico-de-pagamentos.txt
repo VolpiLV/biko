@@ -1,0 +1,67 @@
+HISTORICO DE PENSAMENTOS - MICROSERVICO DE PAGAMENTOS
+=====================================================
+
+-------------------------------------------------------------------------
+O QUE FOI PEDIDO
+-------------------------------------------------------------------------
+
+  Manter o microsservico de notificacoes e criar um microsservico / API
+  de venda e pagamento. Nao precisa ser funcional de verdade, so precisa
+  funcionar visualmente e registrar o pagamento, porque o app e para a
+  apresentacao do TCC final (nao vai para producao).
+
+-------------------------------------------------------------------------
+RACIOCINIO
+-------------------------------------------------------------------------
+
+  - Pagamento era o item que faltava no Biko e e um exemplo classico de
+    microsservico: regras proprias (Pix, cartao, estorno, taxa) e dados
+    que so ele precisa. No mundo real seria trocado por um gateway
+    (Mercado Pago, Stripe...) sem mexer no resto do app.
+  - Como e simulado, o servico IMITA um gateway: Pix com codigo de
+    mentira que fica "aguardando" ate tocar em "Simular pagamento", e
+    cartao que aprova na hora (final 0002 recusa, para mostrar o erro).
+  - Mesmo sendo demo, o numero inteiro do cartao e o CVV nunca saem do
+    navegador: so vai o final, a bandeira e as parcelas. Em todas as
+    telas de pagamento tem o aviso "Ambiente de demonstracao".
+  - Para ter cara de "venda": taxa da plataforma de 10% (R$ 120 pago =
+    R$ 12 Biko + R$ 108 prestador) e aba Vendas com o resumo.
+  - Os dois microsservicos conversam pelo fluxo que ja existia: pagamento
+    aprovado entra no historico do pedido e vira a notificacao
+    "Pagamento recebido" para o prestador.
+
+-------------------------------------------------------------------------
+SOLUCAO ADOTADA
+-------------------------------------------------------------------------
+
+  1. Pasta nova "pagamentos/": processo separado (porta 3002), banco
+     proprio (pagamentos.db).
+  2. Botao laranja "Pagar" no pedido confirmado (so para o cliente).
+  3. Pix: QR (desenho), copia e cola, contagem de 30 min, botao
+     "Simular pagamento recebido (demo)".
+  4. Cartao: cartao desenhado que se preenche ao digitar, 1x a 3x sem
+     juros. 4242 4242 4242 4242 aprova; final 0002 recusa.
+  5. Comprovante com codigo da transacao (BKP-...) e autorizacao.
+  6. Selo "Pago" nos pedidos; abas "Pagamentos" (cliente) e "Vendas"
+     (prestador e admin) com total, taxa e liquido.
+  7. Pedido pago cancelado = estorno automatico + notificacao
+     "Pagamento estornado". Se o servico estiver fora, tenta de novo a
+     cada 10 s.
+
+  Passo a passo completo e roteiro da apresentacao:
+  pagamentos/PASSO_A_PASSO.md
+
+-------------------------------------------------------------------------
+COMO RODAR
+-------------------------------------------------------------------------
+
+  npm run tudo   (API 3000 + notificacoes 3001 + pagamentos 3002)
+  npm test       (120 da API + 10 notificacoes + 10 pagamentos, todos ok)
+
+-------------------------------------------------------------------------
+PENDENTE
+-------------------------------------------------------------------------
+
+  - App Flutter (pasta mobile) ainda sem as telas de pagamento e o sino.
+    So foram adicionados os nomes "Pagamento aprovado" e "Pagamento
+    estornado" no historico do pedido, para o app nao mostrar o codigo.

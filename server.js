@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { db, hashPassword, verifyPassword, tx } = require('./db');
+const { chamarServico, ServicoForaDoAr } = require('./servicos');
 const notificador = require('./notificador'); // ponte com o microsserviço de notificações (pasta notificacoes/)
 notificador.preencherInicial();
 
@@ -542,6 +543,7 @@ route('GET', '/api/providers/:id/agenda', { auth: true }, (ctx) => {
 // 5. AGENDAMENTO / PEDIDOS (regras de negócio)
 // =====================================================================
 const ACTIVE = ['pendente', 'confirmado'];
+const PAYABLE = ['confirmado', 'concluido'];     // o cliente paga depois que o prestador confirma
 const STATUSES = ['pendente', 'confirmado', 'recusado', 'concluido', 'cancelado'];
 const OPEN_HOUR = 7, CLOSE_HOUR = 20;           // atendimento das 07:00 às 20:00
 const MIN_LEAD_MS = 60 * 60 * 1000;             // agendar com pelo menos 1 h de antecedência
@@ -638,6 +640,9 @@ function orderView(o, user) {
     client: { id: o.client_id, name: o.client_name, photo_url: photoUrl(o.client_id, o.client_photo_v), phone: seeContact ? o.client_phone : null },
     provider: { id: o.provider_id, name: o.provider_name, photo_url: photoUrl(o.provider_id, o.provider_photo_v), phone: seeContact ? o.provider_phone : null },
     actions: availableActions(o, user),
+    // pagamento (simulado, microsserviço pagamentos/)
+    payment: o.payment_status ? { status: o.payment_status, code: o.payment_code } : null,
+    can_pay: o.client_id === user.id && PAYABLE.includes(o.status) && !['pago', 'estorno_pendente', 'estornado'].includes(o.payment_status),
   };
 }
 
@@ -757,7 +762,7 @@ route('GET', '/api/orders/:id', { auth: true }, (ctx) => {
   return [200, { order: { ...orderView(o, ctx.user), history } }];
 });
 
-route('POST', '/api/orders/:id/status', { auth: true }, (ctx) => {
+route('POST', '/api/orders/:id/status', { auth: true }, async (ctx) => {
   const action = String(ctx.body.action || '');
   const a = ACTIONS[action];
   if (!a) fail(400, 'Ação inválida.');
@@ -835,8 +840,14 @@ route('POST', '/api/orders/:id/status', { auth: true }, (ctx) => {
     db.prepare('UPDATE orders SET status = ?, status_reason = ?, completed_ts = ?, updated_at = ? WHERE id = ?')
       .run(a.to, reason || null, a.to === 'concluido' ? t : null, t, o.id);
     addEvent(o.id, a.to, ctx.user.id, note);
+    // Pedido já pago foi cancelado: o dinheiro volta para o cliente (estorno no microsserviço de pagamentos)
+    if (a.to === 'cancelado' && o.payment_status === 'pago') {
+      db.prepare("UPDATE orders SET payment_status = 'estorno_pendente' WHERE id = ?").run(o.id);
+      estornoActor.set(o.id, ctx.user.id);
+    }
     return o.id;
   });
+  await processarEstornos();
   return [200, { order: orderView(db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(id), ctx.user) }];
 });
 
@@ -870,6 +881,113 @@ route('POST', '/api/notificacoes/lidas', { auth: true }, async (ctx) => [200, aw
 route('POST', '/api/notificacoes/:id/lida', { auth: true }, async (ctx) => {
   if (!/^\d+$/.test(ctx.params.id)) fail(404, 'Notificação não encontrada.');
   return [200, await notif('POST', `${notifBase(ctx)}/${ctx.params.id}/lida`, {})];
+});
+
+// =====================================================================
+// PAGAMENTOS / VENDAS (SIMULADO — quem guarda as cobranças é o MICROSSERVIÇO da pasta pagamentos/;
+// nenhum dinheiro de verdade é movimentado, serve só para a apresentação)
+// =====================================================================
+const pagUrl = () => process.env.PAG_URL || 'http://127.0.0.1:3002';
+const PAG_KEY = process.env.PAG_KEY || 'biko-dev-key';
+async function pag(method, pathname, body) {
+  try {
+    const r = await chamarServico(pagUrl(), PAG_KEY, method, pathname, body);
+    if (r.status >= 400) fail(r.status === 401 ? 502 : r.status, r.data.error || 'Erro no serviço de pagamentos.');
+    return r.data;
+  } catch (e) {
+    if (e instanceof ServicoForaDoAr) fail(503, 'O pagamento está fora do ar agora. Tente de novo em instantes; o pedido continua valendo.');
+    throw e;
+  }
+}
+const brl = (v) => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
+const METODO_LABEL = { pix: 'Pix', cartao: 'cartão' };
+
+// Guarda no pedido o que o microsserviço respondeu. Se aprovou agora, entra no histórico
+// do pedido (e por tabela vira a notificação "Pagamento recebido" para o prestador).
+function aplicarCobranca(orderId, c, actorId) {
+  tx(() => {
+    const o = db.prepare('SELECT payment_status FROM orders WHERE id = ?').get(orderId);
+    const status = c.status === 'aprovado' ? 'pago' : c.status;
+    db.prepare('UPDATE orders SET payment_status = ?, payment_id = ?, payment_code = ?, updated_at = ? WHERE id = ?').run(status, c.id, c.codigo, now(), orderId);
+    if (status === 'pago' && o.payment_status !== 'pago') {
+      const forma = c.metodo === 'cartao' ? `cartão ${c.cartao.bandeira} final ${c.cartao.final}${c.parcelas > 1 ? ` em ${c.parcelas}x` : ''}` : 'Pix';
+      addEvent(orderId, 'pago', actorId, `${brl(c.valor)} via ${forma} — comprovante ${c.codigo}`);
+    }
+  });
+}
+
+// Estornos pendentes (pedido pago que foi cancelado). Se o microsserviço estiver fora do ar,
+// tenta de novo depois — o pedido fica como "estorno_pendente" até dar certo.
+const estornoActor = new Map();
+async function processarEstornos() {
+  const pend = db.prepare("SELECT id, payment_id, status_reason FROM orders WHERE payment_status = 'estorno_pendente' LIMIT 20").all();
+  for (const o of pend) {
+    let c;
+    try { c = (await chamarServico(pagUrl(), PAG_KEY, 'POST', `/cobrancas/${o.payment_id}/estornar`, { motivo: o.status_reason || 'Pedido cancelado' })).data.cobranca; }
+    catch (e) { return; } // fora do ar: tenta na próxima
+    if (!c) continue;
+    tx(() => {
+      db.prepare("UPDATE orders SET payment_status = 'estornado' WHERE id = ? AND payment_status = 'estorno_pendente'").run(o.id);
+      addEvent(o.id, 'estornado', estornoActor.get(o.id) ?? null, `${brl(c.valor)} devolvido ao cliente (${c.codigo})`);
+    });
+    estornoActor.delete(o.id);
+  }
+}
+
+// O cliente paga o pedido: Pix (fica aguardando) ou cartão (aprova/recusa na hora).
+// Do cartão só chega o FINAL (4 dígitos), a bandeira e as parcelas — o número inteiro nunca sai do navegador.
+route('POST', '/api/orders/:id/pagamento', { auth: true, roles: ['cliente'] }, async (ctx) => {
+  const o = loadOrderFor(ctx.user, Number(ctx.params.id));
+  if (o.client_id !== ctx.user.id) fail(403, 'Só o cliente do pedido pode pagar.');
+  if (!PAYABLE.includes(o.status)) fail(409, 'Só dá para pagar depois que o prestador confirmar o pedido.');
+  if (['pago', 'estorno_pendente', 'estornado'].includes(o.payment_status)) fail(409, 'Este pedido já foi pago.');
+  const { metodo, cartao } = ctx.body;
+  if (!['pix', 'cartao'].includes(metodo)) fail(400, 'Escolha Pix ou cartão.', { metodo: 'Escolha a forma de pagamento.' });
+  let card = null;
+  if (metodo === 'cartao') {
+    const c = cartao || {};
+    if (!/^\d{4}$/.test(String(c.final || ''))) fail(400, 'Dados do cartão inválidos.', { cartao: 'Informe o número do cartão.' });
+    card = { final: String(c.final), bandeira: c.bandeira, parcelas: Number(c.parcelas || 1) };
+  }
+  const { cobranca } = await pag('POST', '/cobrancas', {
+    pedido_id: o.id, descricao: o.service_title, valor_centavos: o.price_cents,
+    pagador_id: o.client_id, pagador_nome: o.client_name, recebedor_id: o.provider_id, recebedor_nome: o.provider_name,
+    metodo, cartao: card,
+  });
+  aplicarCobranca(o.id, cobranca, ctx.user.id);
+  return [201, { cobranca, order: orderView(db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(o.id), ctx.user) }];
+});
+
+// "Simular pagamento" do Pix (na vida real quem avisa é o banco)
+route('POST', '/api/orders/:id/pagamento/confirmar', { auth: true, roles: ['cliente'] }, async (ctx) => {
+  const o = loadOrderFor(ctx.user, Number(ctx.params.id));
+  if (o.client_id !== ctx.user.id) fail(403, 'Só o cliente do pedido pode pagar.');
+  if (!o.payment_id) fail(404, 'Nenhum pagamento iniciado para este pedido.');
+  const { cobranca } = await pag('POST', `/cobrancas/${o.payment_id}/confirmar`, {});
+  aplicarCobranca(o.id, cobranca, ctx.user.id);
+  return [200, { cobranca, order: orderView(db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(o.id), ctx.user) }];
+});
+
+// Comprovante / situação do pagamento de um pedido (cliente, prestador do pedido e admin)
+route('GET', '/api/orders/:id/pagamento', { auth: true }, async (ctx) => {
+  const o = loadOrderFor(ctx.user, Number(ctx.params.id));
+  if (!o.payment_id) return [200, { cobranca: null }];
+  const { cobranca } = await pag('GET', `/cobrancas/${o.payment_id}`);
+  if (o.client_id !== ctx.user.id) cobranca.pix_copia_cola = null; // só quem paga vê o código Pix
+  return [200, { cobranca }];
+});
+
+// Vendas: cliente vê o que pagou, prestador o que vendeu (com a taxa da plataforma), admin vê tudo
+route('GET', '/api/pagamentos', { auth: true }, async (ctx) => {
+  await processarEstornos();
+  const qs = new URLSearchParams();
+  if (ctx.user.role === 'cliente') qs.set('pagador_id', ctx.user.id);
+  else if (ctx.user.role === 'prestador') qs.set('recebedor_id', ctx.user.id);
+  const page = parsePage(ctx.query, 20, 100);
+  qs.set('limit', page.limit); qs.set('offset', page.offset);
+  const d = await pag('GET', `/cobrancas?${qs}`);
+  if (ctx.user.role !== 'cliente') d.cobrancas.forEach((c) => (c.pix_copia_cola = null));
+  return [200, d];
 });
 
 // ---------- arquivos estáticos ----------
@@ -945,8 +1063,13 @@ const server = http.createServer(async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 // Enquanto o servidor estiver no ar, a caixa de saída é entregue ao microsserviço a cada 2 s
-server.on('listening', () => notificador.iniciar());
-server.on('close', () => notificador.parar());
+let estornoTimer = null;
+server.on('listening', () => {
+  notificador.iniciar();
+  estornoTimer = setInterval(() => processarEstornos().catch(() => {}), 10000);
+  estornoTimer.unref();
+});
+server.on('close', () => { notificador.parar(); clearInterval(estornoTimer); });
 if (require.main === module) {
   server.listen(PORT, () => console.log(`Biko rodando em http://localhost:${PORT}`));
 }

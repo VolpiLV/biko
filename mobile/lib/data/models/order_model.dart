@@ -71,6 +71,8 @@ String orderEventLabel(String kind) {
     'iniciado': 'Atendimento iniciado',
     'prorrogado': 'Tempo prorrogado',
     'remarcado': 'Horário remarcado',
+    'pago': 'Pagamento aprovado',
+    'estornado': 'Pagamento estornado',
   };
   for (final s in OrderStatus.values) {
     if (s.apiValue == kind) return s.label;

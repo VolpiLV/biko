@@ -7,31 +7,14 @@
 //    fora do ar, tenta de novo depois (espera 2 s, 4 s, 8 s... até 60 s).
 // 3) chamar(): usado pelas rotas /api/notificacoes para consultar o microsserviço.
 const { db } = require('./db');
+const { chamarServico, ServicoForaDoAr } = require('./servicos');
 
 const notifUrl = () => (process.env.NOTIF_URL || 'http://127.0.0.1:3001').replace(/\/$/, '');
 const NOTIF_KEY = process.env.NOTIF_KEY || 'biko-dev-key';
 const TIMEOUT_MS = 3000;
 const INTERVALO_MS = 2000;
 
-class ServicoForaDoAr extends Error {}
-
-async function chamar(method, path, body) {
-  let res;
-  try {
-    res = await fetch(notifUrl() + path, {
-      method,
-      headers: { 'X-Service-Key': NOTIF_KEY, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-  } catch (e) {
-    throw new ServicoForaDoAr(e.message);
-  }
-  let data = {};
-  try { data = await res.json(); } catch { /* sem corpo */ }
-  if (res.status >= 500) throw new ServicoForaDoAr(data.error || `HTTP ${res.status}`);
-  return { status: res.status, data };
-}
+const chamar = (method, path, body) => chamarServico(notifUrl(), NOTIF_KEY, method, path, body, TIMEOUT_MS);
 
 // Chamado dentro da transação de quem muda o pedido (addEvent no server.js)
 function publicar(eventoId, orderId, acao, atorId, nota) {

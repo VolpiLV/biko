@@ -253,7 +253,7 @@ const CAT_ICON = { 'Telhado & Reparador': '🏠', Encanador: '🔧', Eletricista
 const ACTION_LABEL = { confirmar: 'Confirmar pedido', recusar: 'Recusar', atrasar: 'Avisar atraso / imprevisto', iniciar: 'Iniciar atendimento', estender: 'Preciso de mais tempo', concluir: 'Marcar como concluído', cancelar: 'Cancelar pedido' };
 const ACTION_DONE = { confirmar: 'Pedido confirmado.', recusar: 'Pedido recusado.', atrasar: 'Cliente avisado. O horário foi adiado.', iniciar: 'Atendimento iniciado.', estender: 'Tempo prorrogado. A agenda foi ajustada.', concluir: 'Pedido concluído.', cancelar: 'Pedido cancelado.' };
 // Eventos do histórico que não são status (agenda elástica)
-const EVENT_LABEL = { ...STATUS_LABEL, atrasado: 'Aviso de atraso', iniciado: 'Atendimento iniciado', prorrogado: 'Tempo prorrogado', remarcado: 'Horário remarcado' };
+const EVENT_LABEL = { ...STATUS_LABEL, atrasado: 'Aviso de atraso', iniciado: 'Atendimento iniciado', prorrogado: 'Tempo prorrogado', remarcado: 'Horário remarcado', pago: 'Pagamento aprovado', estornado: 'Pagamento estornado' };
 const OPEN_MIN = 7 * 60, CLOSE_MIN = 20 * 60; // mesmo horário de atendimento do backend
 
 // Avatar: foto (se houver) ou iniciais do nome
@@ -265,9 +265,9 @@ function avatarHtml(u, cls = '') {
 function navItems() {
   const r = state.user.role;
   const items = [{ id: 'home', ico: '🏠', label: 'Início' }];
-  if (r === 'cliente') { items.push({ id: 'search', ico: '🔍', label: 'Buscar' }, { id: 'orders', ico: '📅', label: 'Pedidos' }); }
-  if (r === 'prestador') { items.push({ id: 'services', ico: '🛠️', label: 'Serviços' }, { id: 'orders', ico: '📅', label: 'Pedidos' }); }
-  if (r === 'admin') { items.push({ id: 'users', ico: '👥', label: 'Usuários' }, { id: 'orders', ico: '📅', label: 'Pedidos' }); }
+  if (r === 'cliente') { items.push({ id: 'search', ico: '🔍', label: 'Buscar' }, { id: 'orders', ico: '📅', label: 'Pedidos' }, { id: 'sales', ico: '💳', label: 'Pagamentos' }); }
+  if (r === 'prestador') { items.push({ id: 'services', ico: '🛠️', label: 'Serviços' }, { id: 'orders', ico: '📅', label: 'Pedidos' }, { id: 'sales', ico: '💰', label: 'Vendas' }); }
+  if (r === 'admin') { items.push({ id: 'users', ico: '👥', label: 'Usuários' }, { id: 'orders', ico: '📅', label: 'Pedidos' }, { id: 'sales', ico: '💰', label: 'Vendas' }); }
   items.push({ id: 'account', ico: '👤', label: 'Conta' });
   return items;
 }
@@ -297,6 +297,7 @@ async function viewApp() {
     else if (tab === 'orders') html = await ordersHtml();
     else if (tab === 'services') html = await servicesHtml();
     else if (tab === 'users') { await loadUsers(); html = usersHtml(); }
+    else if (tab === 'sales') html = await salesHtml();
     else html = accountHtml();
     if (seq !== viewApp.seq) return;
     $app.innerHTML = shell(html);
@@ -306,6 +307,7 @@ async function viewApp() {
     if (tab === 'orders') bindOrders();
     if (tab === 'services') bindServices();
     if (tab === 'users') bindUsers();
+    if (tab === 'sales') bindSales();
     if (tab === 'account') bindAccount();
   } catch (err) {
     if (state.user && seq === viewApp.seq) { $app.innerHTML = shell(`<div class="empty">${esc(err.message)}</div>`); bindNav(); }
@@ -338,7 +340,7 @@ async function refreshBell() {
 setInterval(() => { if (state.user && !document.hidden) refreshBell(); }, 20000);
 
 // Histórico de notificações: cada item mostra o NOME DA AÇÃO (ex.: "Pedido confirmado"), não a data.
-const NOTIF_ICON = { pendente: '🆕', confirmado: '✅', recusado: '⛔', cancelado: '✖️', concluido: '🏁', atrasado: '⏰', iniciado: '▶️', prorrogado: '⏳', remarcado: '🔁' };
+const NOTIF_ICON = { pendente: '🆕', confirmado: '✅', recusado: '⛔', cancelado: '✖️', concluido: '🏁', atrasado: '⏰', iniciado: '▶️', prorrogado: '⏳', remarcado: '🔁', pago: '💰', estornado: '↩️' };
 async function notifModal() {
   const ov = document.createElement('div');
   ov.className = 'overlay';
@@ -568,7 +570,7 @@ function orderCard(o) {
   return `<div class="card-item order" data-order="${o.id}" role="button" tabindex="0">
     <div class="info"><b>${esc(o.service_title)}</b><small>${esc(counterpart(o))}</small>
       <small>📅 ${dateBR(o.date)} · ${o.time}–${o.end_time}${o.delay_min ? ` <span class="warn">(⏰ atraso +${o.delay_min} min)</span>` : ''}</small></div>
-    <div class="right"><span class="badge st-${o.in_progress ? 'andamento' : o.status}">${o.in_progress ? 'Em andamento' : STATUS_LABEL[o.status]}</span><b>${brl(o.price)}</b></div></div>`;
+    <div class="right"><span class="badge st-${o.in_progress ? 'andamento' : o.status}">${o.in_progress ? 'Em andamento' : STATUS_LABEL[o.status]}</span><b>${brl(o.price)}</b>${payBadge(o.payment)}</div></div>`;
 }
 
 async function ordersHtml() {
@@ -623,7 +625,8 @@ async function orderModal(id) {
     ${o.delay_min ? `<div class="notice warn">⏰ <b>Aviso de atraso:</b> o horário era ${o.original_time} e agora é ${o.time} (+${o.delay_min} min).<br>Motivo: ${esc(o.delay_reason)}.${o.status === 'confirmado' || o.status === 'pendente' ? ' O cliente pode cancelar sem custo.' : ''}</div>` : ''}
     ${o.started_time ? `<div class="kv"><span>Início real</span><b>${o.started_time}${o.extended_min ? ` · previsto até ${o.planned_end_time}, prorrogado +${fmtDur(o.extended_min)}` : ''}</b></div>` : ''}
     ${o.real_duration_min ? `<div class="kv"><span>Tempo real</span><b>${fmtDur(o.real_duration_min)}</b></div>` : ''}
-    <div class="kv"><span>Valor</span><b>${brl(o.price)}</b></div>
+    <div class="kv"><span>Valor</span><b>${brl(o.price)}${payBadge(o.payment)}</b></div>
+    ${o.payment && o.payment.status !== 'recusado' ? `<div class="kv"><span>Pagamento</span><b>${PAY_LABEL[o.payment.status] || esc(o.payment.status)}${o.payment.code ? `<br><small>${esc(o.payment.code)}</small>` : ''}<br><button type="button" class="link" id="seeReceipt">${o.payment.status === 'aguardando' && o.can_pay ? 'Continuar pagamento' : 'Ver comprovante'}</button></b></div>` : ''}
     <div class="kv"><span>Endereço</span><b>${esc(o.address)}</b></div>
     ${o.notes ? `<div class="kv"><span>Observações</span><b>${esc(o.notes)}</b></div>` : ''}
     ${person('Cliente', o.client)}${person('Prestador', o.provider)}
@@ -641,6 +644,7 @@ async function orderModal(id) {
       <div class="actions" style="margin-top:12px"><button type="button" class="btn secondary" id="reasonBack" style="margin:0">Voltar</button><button type="button" class="btn danger" id="reasonOk" style="margin:0">Confirmar</button></div>
     </div>
     <div id="actionBox" class="stack">
+      ${o.can_pay && !(o.payment && o.payment.status === 'aguardando') ? `<button type="button" class="btn pay" id="payBtn" style="margin-top:10px">💳 Pagar ${brl(o.price)}</button>` : ''}
       ${o.actions.map((a) => `<button type="button" class="btn ${a === 'confirmar' || a === 'concluir' || a === 'iniciar' ? '' : a === 'recusar' || a === 'cancelar' ? 'danger' : 'secondary'}" data-act="${a}" style="margin-top:10px">${ACTION_LABEL[a]}</button>`).join('')}
       <button type="button" class="btn secondary" id="closeOrder" style="margin-top:10px">Fechar</button>
     </div></div>`;
@@ -648,6 +652,14 @@ async function orderModal(id) {
   const close = () => ov.remove();
   ov.onclick = (e) => { if (e.target === ov) close(); };
   ov.querySelector('#closeOrder').onclick = close;
+  const payBtn = ov.querySelector('#payBtn');
+  if (payBtn) payBtn.onclick = () => { close(); payModal(o); };
+  const seeReceipt = ov.querySelector('#seeReceipt');
+  if (seeReceipt) seeReceipt.onclick = async () => {
+    if (o.payment.status === 'aguardando' && o.can_pay) { close(); return payModal(o); }
+    try { const { cobranca } = await api('GET', `/api/orders/${o.id}/pagamento`); close(); receiptModal(cobranca); }
+    catch (err) { toast(err.message, true); }
+  };
 
   async function send(action, reason, minutes) {
     try {
@@ -685,6 +697,208 @@ async function orderModal(id) {
       ov.querySelector('#reasonBack').onclick = () => { ov.querySelector('#reasonBox').hidden = true; ov.querySelector('#actionBox').hidden = false; };
     } else send(a);
   }));
+}
+
+
+// =====================================================================
+// PAGAMENTOS / VENDAS (SIMULADO — microsserviço pagamentos/, nada é cobrado de verdade)
+// =====================================================================
+const PAY_LABEL = { aguardando: 'Aguardando Pix', pago: 'Pago', aprovado: 'Aprovado', recusado: 'Recusado', expirado: 'Expirado', estornado: 'Estornado', estorno_pendente: 'Estorno em andamento' };
+const payBadge = (p) => (p && p.status !== 'recusado' ? `<span class="pay-badge pb-${p.status}">${p.status === 'pago' ? '✓ ' : ''}${PAY_LABEL[p.status] || esc(p.status)}</span>` : '');
+const DEMO_NOTE = '<div class="demo-note">🧪 Ambiente de demonstração (TCC): nenhum valor é cobrado. Não use dados reais.</div>';
+const bandeiraDe = (num) => (/^4/.test(num) ? 'Visa' : /^5[1-5]/.test(num) ? 'Mastercard' : /^(4011|4312|4389|5041|5066|5067|6277|6362|6363|6504|6505|6516)/.test(num) ? 'Elo' : 'Cartão');
+
+// "QR Code" de enfeite: desenho gerado a partir do código (não é um QR de verdade)
+function fakeQr(text) {
+  const n = 25; let h = 2166136261;
+  for (const ch of text) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  const rnd = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return (h >>> 0) / 4294967296; };
+  const finder = (x, y) => [[0, 0], [n - 7, 0], [0, n - 7]].some(([fx, fy]) => x >= fx && x < fx + 7 && y >= fy && y < fy + 7);
+  const finderOn = (x, y) => { const fx = x < 7 ? 0 : n - 7, fy = y < 7 ? 0 : n - 7; const dx = x - fx, dy = y - fy; return dx === 0 || dy === 0 || dx === 6 || dy === 6 || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4); };
+  let rects = '';
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    if (finder(x, y) ? finderOn(x, y) : rnd() > 0.52) rects += `<rect x="${x}" y="${y}" width="1" height="1"/>`;
+  }
+  return `<svg class="qr" viewBox="-2 -2 ${n + 4} ${n + 4}" role="img" aria-label="QR Code Pix (demonstração)"><rect x="-2" y="-2" width="${n + 4}" height="${n + 4}" fill="#fff"/><g fill="#14213d">${rects}</g></svg>`;
+}
+
+function payModal(o) {
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = '<div class="sheet"></div>';
+  $app.appendChild(ov);
+  const sheet = ov.querySelector('.sheet');
+  let timer = null;
+  const close = () => { clearInterval(timer); ov.remove(); };
+  ov.onclick = (e) => { if (e.target === ov) close(); };
+  const head = `<div class="row-between"><h3>Pagamento</h3><span class="badge">${brl(o.price)}</span></div>
+    <div class="kv"><span>Serviço</span><b>${esc(o.service_title)}</b></div>
+    <div class="kv"><span>Prestador</span><b>${esc(o.provider.name)}</b></div>
+    <div class="kv"><span>Quando</span><b>${dateBR(o.date)} · ${o.time}</b></div>`;
+  const done = async (c) => {
+    clearInterval(timer);
+    refreshBell();
+    if (c.status === 'aprovado') { close(); await viewApp(); receiptModal(c, true); }
+  };
+
+  function choose(metodo = 'pix') {
+    clearInterval(timer);
+    sheet.innerHTML = `${head}${DEMO_NOTE}
+      <label>Forma de pagamento</label>
+      <div class="seg"><button type="button" data-m="pix" class="${metodo === 'pix' ? 'on' : ''}">◆ Pix</button><button type="button" data-m="cartao" class="${metodo === 'cartao' ? 'on' : ''}">💳 Cartão de crédito</button></div>
+      <div id="payBody"></div>`;
+    sheet.querySelectorAll('[data-m]').forEach((b) => (b.onclick = () => choose(b.dataset.m)));
+    const body = sheet.querySelector('#payBody');
+    if (metodo === 'pix') {
+      body.innerHTML = `<p class="hint">Aprovação na hora. Vamos gerar um código Pix para este pedido.</p>
+        <button type="button" class="btn pay" id="genPix">Gerar Pix de ${brl(o.price)}</button>
+        <button type="button" class="btn secondary" id="payCancel" style="margin-top:10px">Voltar</button>`;
+      body.querySelector('#genPix').onclick = async (e) => {
+        e.target.disabled = true;
+        try { const r = await api('POST', `/api/orders/${o.id}/pagamento`, { metodo: 'pix' }); showPix(r.cobranca); }
+        catch (err) { e.target.disabled = false; toast(err.message, true); }
+      };
+    } else {
+      const parc = [1, 2, 3].map((n) => `<option value="${n}">${n}x de ${brl(o.price / n)} sem juros</option>`).join('');
+      body.innerHTML = `<form id="cardForm" novalidate>
+        <div class="card-preview"><span id="cpBrand">Cartão</span><b id="cpNum">•••• •••• •••• ••••</b><small id="cpName">NOME NO CARTÃO</small></div>
+        <label for="cNum">Número do cartão</label>
+        <input id="cNum" name="cNum" inputmode="numeric" autocomplete="off" placeholder="4242 4242 4242 4242" maxlength="19"><div class="field-error" data-err="cNum"></div>
+        <label for="cName">Nome no cartão</label>
+        <input id="cName" name="cName" autocomplete="off" placeholder="Como está no cartão"><div class="field-error" data-err="cName"></div>
+        <div class="two">
+          <div><label for="cExp">Validade</label><input id="cExp" name="cExp" inputmode="numeric" autocomplete="off" placeholder="MM/AA" maxlength="5"><div class="field-error" data-err="cExp"></div></div>
+          <div><label for="cCvv">CVV</label><input id="cCvv" name="cCvv" inputmode="numeric" autocomplete="off" placeholder="123" maxlength="4"><div class="field-error" data-err="cCvv"></div></div>
+        </div>
+        <label for="cParc">Parcelas</label><select id="cParc" name="cParc">${parc}</select>
+        <small class="hint">Teste: 4242 4242 4242 4242 é aprovado; um cartão terminado em 0002 é recusado. Só os 4 últimos dígitos saem do seu aparelho.</small>
+        <button class="btn pay" type="submit">Pagar ${brl(o.price)}</button>
+        <button type="button" class="btn secondary" id="payCancel" style="margin-top:10px">Voltar</button>
+      </form>`;
+      const f = body.querySelector('#cardForm');
+      const digits = () => f.cNum.value.replace(/\D/g, '');
+      f.cNum.oninput = () => {
+        const d = digits().slice(0, 16);
+        f.cNum.value = d.replace(/(\d{4})(?=\d)/g, '$1 ');
+        sheet.querySelector('#cpNum').textContent = (d + '•'.repeat(16 - d.length)).replace(/(.{4})(?=.)/g, '$1 ');
+        sheet.querySelector('#cpBrand').textContent = bandeiraDe(d);
+      };
+      f.cName.oninput = () => (sheet.querySelector('#cpName').textContent = f.cName.value.toUpperCase() || 'NOME NO CARTÃO');
+      f.cExp.oninput = () => { const d = f.cExp.value.replace(/\D/g, '').slice(0, 4); f.cExp.value = d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d; };
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        const d = digits(), fields = {};
+        if (d.length < 13) fields.cNum = 'Número do cartão incompleto.';
+        if (f.cName.value.trim().length < 3) fields.cName = 'Informe o nome como está no cartão.';
+        const m = /^(\d{2})\/(\d{2})$/.exec(f.cExp.value);
+        if (!m || Number(m[1]) < 1 || Number(m[1]) > 12) fields.cExp = 'Validade inválida.';
+        if (!/^\d{3,4}$/.test(f.cCvv.value)) fields.cCvv = 'CVV inválido.';
+        showFieldErrors(f, fields);
+        if (Object.keys(fields).length) return;
+        const btn = f.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Processando…';
+        try {
+          // Só o final, a bandeira e as parcelas vão para o servidor (o CVV e o número inteiro nunca saem daqui)
+          const r = await api('POST', `/api/orders/${o.id}/pagamento`, { metodo: 'cartao', cartao: { final: d.slice(-4), bandeira: bandeiraDe(d), parcelas: Number(f.cParc.value) } });
+          if (r.cobranca.status === 'recusado') {
+            btn.disabled = false; btn.textContent = `Pagar ${brl(o.price)}`;
+            formAlert(f, `❌ ${r.cobranca.motivo}. Tente outro cartão ou pague com Pix.`);
+          } else await done(r.cobranca);
+        } catch (err) { btn.disabled = false; btn.textContent = `Pagar ${brl(o.price)}`; toast(err.message, true); }
+      };
+    }
+    body.querySelector('#payCancel').onclick = () => { close(); orderModal(o.id); };
+  }
+
+  function showPix(c) {
+    sheet.innerHTML = `${head}${DEMO_NOTE}
+      <div class="pix-box">
+        ${fakeQr(c.pix_copia_cola)}
+        <small>Escaneie o QR Code no app do seu banco ou use o Pix copia e cola</small>
+        <div class="pix-code"><code>${esc(c.pix_copia_cola)}</code></div>
+        <button type="button" class="btn secondary small" id="copyPix">Copiar código</button>
+        <div class="pix-timer">Expira em <b id="pixLeft">30:00</b></div>
+      </div>
+      <button type="button" class="btn pay" id="simPix">✅ Simular pagamento recebido (demo)</button>
+      <button type="button" class="btn secondary" id="otherWay" style="margin-top:10px">Trocar forma de pagamento</button>`;
+    const left = sheet.querySelector('#pixLeft');
+    const tick = () => {
+      const ms = Math.max(0, c.expira_em - Date.now());
+      left.textContent = `${pad2(Math.floor(ms / 60000))}:${pad2(Math.floor((ms % 60000) / 1000))}`;
+      if (!ms) clearInterval(timer);
+    };
+    tick(); timer = setInterval(tick, 1000);
+    sheet.querySelector('#copyPix').onclick = async () => {
+      try { await navigator.clipboard.writeText(c.pix_copia_cola); toast('Código Pix copiado.'); } catch (e) { toast('Não deu para copiar automaticamente.', true); }
+    };
+    sheet.querySelector('#otherWay').onclick = () => choose('cartao');
+    sheet.querySelector('#simPix').onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = 'Confirmando com o banco…';
+      try {
+        await new Promise((r) => setTimeout(r, 900)); // só para dar a sensação de "processando"
+        const r = await api('POST', `/api/orders/${o.id}/pagamento/confirmar`);
+        await done(r.cobranca);
+      } catch (err) { e.target.disabled = false; e.target.textContent = '✅ Simular pagamento recebido (demo)'; toast(err.message, true); }
+    };
+  }
+
+  // Já existe um Pix aguardando para este pedido? Continua dele.
+  if (o.payment && o.payment.status === 'aguardando') {
+    api('GET', `/api/orders/${o.id}/pagamento`).then(({ cobranca }) => (cobranca && cobranca.status === 'aguardando' ? showPix(cobranca) : choose()))
+      .catch((err) => { toast(err.message, true); choose(); });
+  } else choose();
+}
+
+// Comprovante de pagamento
+function receiptModal(c, justPaid) {
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  const seller = state.user.role !== 'cliente';
+  const forma = c.metodo === 'cartao' ? `${esc(c.cartao.bandeira)} •••• ${esc(c.cartao.final)}${c.parcelas > 1 ? ` · ${c.parcelas}x de ${brl(c.valor / c.parcelas)}` : ' · à vista'}` : 'Pix';
+  const when = c.pago_em ? dateTimeBR(c.pago_em) : dateTimeBR(c.criada_em);
+  ov.innerHTML = `<div class="sheet receipt">
+    <div class="receipt-head ${c.status}">
+      <div class="receipt-ico">${c.status === 'aprovado' ? '✓' : c.status === 'estornado' ? '↩' : c.status === 'aguardando' ? '…' : '✕'}</div>
+      <h3>${c.status === 'aprovado' ? (justPaid ? 'Pagamento aprovado!' : 'Pagamento aprovado') : PAY_LABEL[c.status] || esc(c.status)}</h3>
+      <b class="receipt-value">${brl(c.valor)}</b>
+    </div>
+    ${DEMO_NOTE}
+    <div class="kv"><span>Serviço</span><b>${esc(c.descricao)}</b></div>
+    <div class="kv"><span>Pago por</span><b>${esc(c.pagador.nome || '—')}</b></div>
+    <div class="kv"><span>Recebido por</span><b>${esc(c.recebedor.nome || '—')}</b></div>
+    <div class="kv"><span>Forma</span><b>${forma}</b></div>
+    <div class="kv"><span>${c.pago_em ? 'Data do pagamento' : 'Criado em'}</span><b>${when}</b></div>
+    <div class="kv"><span>Transação</span><b>${esc(c.codigo)}</b></div>
+    ${c.autorizacao ? `<div class="kv"><span>Autorização</span><b>${esc(c.autorizacao)}</b></div>` : ''}
+    ${seller ? `<div class="kv"><span>Taxa Biko (10%)</span><b>− ${brl(c.taxa)}</b></div><div class="kv"><span>Valor líquido</span><b>${brl(c.liquido)}</b></div>` : ''}
+    ${c.motivo ? `<div class="kv"><span>Observação</span><b>${esc(c.motivo)}</b></div>` : ''}
+    <button type="button" class="btn secondary" id="rClose" style="margin-top:14px">Fechar</button>
+  </div>`;
+  $app.appendChild(ov);
+  const close = () => ov.remove();
+  ov.onclick = (e) => { if (e.target === ov) close(); };
+  ov.querySelector('#rClose').onclick = close;
+}
+
+// Aba Vendas (prestador/admin) ou Pagamentos (cliente)
+async function salesHtml() {
+  const d = await api('GET', '/api/pagamentos?limit=50');
+  state.sales = d.cobrancas;
+  const r = d.resumo, role = state.user.role;
+  const stats = role === 'cliente'
+    ? `<div class="stat"><b>${r.vendas}</b><small>Pagamentos</small></div><div class="stat"><b>${brl(r.bruto)}</b><small>Total pago</small></div><div class="stat"><b>${r.estornos}</b><small>Estornos</small></div>`
+    : `<div class="stat"><b>${brl(r.bruto)}</b><small>${role === 'admin' ? 'Vendido na plataforma' : 'Total vendido'}</small></div><div class="stat"><b>${brl(r.taxa)}</b><small>Taxa Biko (10%)</small></div><div class="stat"><b>${brl(r.liquido)}</b><small>${role === 'admin' ? 'Repassado' : 'Você recebe'}</small></div>`;
+  const item = (c, i) => `<div class="card-item order" data-sale="${i}" role="button" tabindex="0">
+      <div class="ci">${c.metodo === 'pix' ? '◆' : '💳'}</div>
+      <div class="info"><b>${esc(c.descricao)}</b><small>${role === 'cliente' ? esc(c.recebedor.nome || '') : role === 'admin' ? `${esc(c.pagador.nome || '')} → ${esc(c.recebedor.nome || '')}` : esc(c.pagador.nome || '')}</small>
+        <small>${c.metodo === 'pix' ? 'Pix' : `${esc(c.cartao.bandeira)} •••• ${esc(c.cartao.final)}${c.parcelas > 1 ? ` · ${c.parcelas}x` : ''}`} · ${esc(c.codigo)}</small></div>
+      <div class="right"><span class="pay-badge pb-${c.status === 'aprovado' ? 'pago' : c.status}">${PAY_LABEL[c.status]}</span><b>${brl(role === 'prestador' ? c.liquido : c.valor)}</b></div></div>`;
+  return `${DEMO_NOTE.replace('demo-note', 'demo-note pad-x')}
+    <div class="stats">${stats}</div>
+    <div class="count">${d.total} transação(ões) · ${r.pix} Pix · ${r.cartao} cartão</div>
+    ${d.cobrancas.length ? `<div>${d.cobrancas.map(item).join('')}</div>` : `<div class="empty">${role === 'cliente' ? 'Você ainda não pagou nenhum pedido.<br>Quando o prestador confirmar um pedido, o botão Pagar aparece nele.' : 'Nenhuma venda ainda.'}</div>`}`;
+}
+function bindSales() {
+  $app.querySelectorAll('[data-sale]').forEach((el) => (el.onclick = () => receiptModal(state.sales[Number(el.dataset.sale)])));
 }
 
 // ---------- serviços (prestador) ----------

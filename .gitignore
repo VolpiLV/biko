@@ -5,6 +5,9 @@ biko.db-wal
 notificacoes/notificacoes.db
 notificacoes/notificacoes.db-shm
 notificacoes/notificacoes.db-wal
+pagamentos/pagamentos.db
+pagamentos/pagamentos.db-shm
+pagamentos/pagamentos.db-wal
 
 node_modules/
 .env

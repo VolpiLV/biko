@@ -1,0 +1,13 @@
+{
+  "name": "biko-pagamentos",
+  "version": "1.0.0",
+  "description": "Biko - microsserviço de pagamentos/vendas SIMULADO (apresentação de TCC)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "test": "node --disable-warning=ExperimentalWarning test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

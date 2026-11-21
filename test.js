@@ -10,6 +10,8 @@ process.env.BIKO_DB = tmp;
 // Microsserviço de notificações: começa "fora do ar" (porta fechada); mais abaixo ele é ligado
 process.env.NOTIF_URL = 'http://127.0.0.1:1';
 process.env.NOTIF_DB = path.join(os.tmpdir(), `biko-notif-test-${Date.now()}.db`);
+process.env.PAG_URL = 'http://127.0.0.1:1'; // pagamentos também começa fora do ar
+process.env.PAG_DB = path.join(os.tmpdir(), `biko-pag-test-${Date.now()}.db`);
 const server = require('./server');
 
 let base;
@@ -994,6 +996,83 @@ async function t(name, fn) {
     assert.strictEqual((await post()).criadas, 1);
     assert.strictEqual((await post()).criadas, 0);
   });
+  // =====================================================================
+  // MICROSSERVIÇO DE PAGAMENTOS (simulado)
+  // =====================================================================
+  let oP;
+  await t('pagamento: só depois de confirmado; prestador não paga; fora do ar -> 503', async () => {
+    oP = (await book(cliente, vaza, D(48), '09:00')).data.order;
+    assert.strictEqual(oP.can_pay, false);
+    assert.strictEqual((await cliente('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'pix' })).status, 409);
+    await prest('POST', `/api/orders/${oP.id}/status`, { action: 'confirmar' });
+    assert.strictEqual((await cliente('GET', `/api/orders/${oP.id}`)).data.order.can_pay, true);
+    assert.strictEqual((await prest('GET', `/api/orders/${oP.id}`)).data.order.can_pay, false);
+    assert.strictEqual((await prest('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'pix' })).status, 403);
+    assert.strictEqual((await cliente('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'pix' })).status, 503);
+    assert.strictEqual((await cliente2.c('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'pix' })).status, 404);
+  });
+  const pms = require('./pagamentos/server');
+  await new Promise((r) => pms.listen(0, '127.0.0.1', r));
+  process.env.PAG_URL = `http://127.0.0.1:${pms.address().port}`;
+  await t('pagamento: método inválido / cartão sem número -> 400', async () => {
+    assert.strictEqual((await cliente('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'boleto' })).status, 400);
+    assert.strictEqual((await cliente('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'cartao', cartao: { final: '12' } })).status, 400);
+  });
+  await t('pagamento: cartão final 0002 é recusado (simulação) e dá para tentar de novo', async () => {
+    const r = await cliente('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'cartao', cartao: { final: '0002', bandeira: 'Visa', parcelas: 1 } });
+    assert.strictEqual(r.status, 201);
+    assert.strictEqual(r.data.cobranca.status, 'recusado');
+    assert.strictEqual(r.data.order.payment.status, 'recusado');
+    assert.strictEqual(r.data.order.can_pay, true);
+  });
+  await t('pagamento: Pix fica aguardando com código copia e cola; simular aprova', async () => {
+    const r = await cliente('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'pix' });
+    assert.strictEqual(r.data.cobranca.status, 'aguardando');
+    assert.ok(/BR\.GOV\.BCB\.PIX/.test(r.data.cobranca.pix_copia_cola));
+    assert.strictEqual((await prest('GET', `/api/orders/${oP.id}/pagamento`)).data.cobranca.pix_copia_cola, null);
+    const c = await cliente('POST', `/api/orders/${oP.id}/pagamento/confirmar`);
+    assert.strictEqual(c.data.cobranca.status, 'aprovado');
+    assert.strictEqual(c.data.order.payment.status, 'pago');
+    assert.ok(/^BKP-/.test(c.data.order.payment.code));
+    assert.strictEqual(c.data.order.can_pay, false);
+    assert.strictEqual(c.data.cobranca.taxa, 12);
+    assert.strictEqual(c.data.cobranca.liquido, 108);
+  });
+  await t('pagamento: pagar de novo -> 409; histórico do pedido mostra "pago"', async () => {
+    assert.strictEqual((await cliente('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'pix' })).status, 409);
+    const h = (await cliente('GET', `/api/orders/${oP.id}`)).data.order.history;
+    assert.ok(h.some((e) => e.status === 'pago' && /Pix/.test(e.note)));
+  });
+  await t('pagamento: prestador recebe a notificação "Pagamento recebido"', async () => {
+    const n = (await prest('GET', '/api/notificacoes')).data.notificacoes[0];
+    assert.strictEqual(n.titulo, 'Pagamento recebido');
+    assert.strictEqual(n.pedido_id, oP.id);
+  });
+  await t('vendas: prestador vê o que vendeu com taxa; cliente vê o que pagou; outro cliente não vê', async () => {
+    const pv = (await prest('GET', '/api/pagamentos')).data;
+    assert.ok(pv.cobrancas.some((c) => c.pedido_id === oP.id && c.status === 'aprovado'));
+    assert.ok(pv.resumo.vendas >= 1 && pv.resumo.liquido >= 108);
+    assert.ok((await cliente('GET', '/api/pagamentos')).data.cobrancas.some((c) => c.pedido_id === oP.id));
+    assert.ok(!(await cliente2.c('GET', '/api/pagamentos')).data.cobrancas.some((c) => c.pedido_id === oP.id));
+    assert.ok((await admin('GET', '/api/pagamentos')).data.total >= 2);
+  });
+  await t('pagamento: pedido pago cancelado -> estorno automático + notificação', async () => {
+    assert.strictEqual((await prest('POST', `/api/orders/${oP.id}/status`, { action: 'cancelar', reason: 'Imprevisto sério' })).status, 200);
+    const o = (await cliente('GET', `/api/orders/${oP.id}`)).data.order;
+    assert.strictEqual(o.payment.status, 'estornado');
+    assert.ok(o.history.some((e) => e.status === 'estornado'));
+    assert.strictEqual((await cliente('GET', `/api/orders/${oP.id}/pagamento`)).data.cobranca.status, 'estornado');
+    assert.strictEqual((await cliente('GET', '/api/notificacoes')).data.notificacoes[0].titulo, 'Pagamento estornado');
+  });
+  await t('pagamento: cartão aprovado na hora com parcelas', async () => {
+    const o = (await book(cliente, vaza, D(49), '09:00')).data.order;
+    await prest('POST', `/api/orders/${o.id}/status`, { action: 'confirmar' });
+    const r = await cliente('POST', `/api/orders/${o.id}/pagamento`, { metodo: 'cartao', cartao: { final: '4242', bandeira: 'Mastercard', parcelas: 3 } });
+    assert.strictEqual(r.data.cobranca.status, 'aprovado');
+    assert.deepStrictEqual(r.data.cobranca.cartao, { final: '4242', bandeira: 'Mastercard' });
+    assert.strictEqual(r.data.cobranca.parcelas, 3);
+  });
+  pms.close();
   ms.close();
 
   // ---------- FORÇA BRUTA ----------
@@ -1006,7 +1085,7 @@ async function t(name, fn) {
   console.log('\nResultados:\n' + results.join('\n'));
   console.log(`\n${passed}/${results.length} testes passaram`);
   server.close();
-  for (const f of [process.env.NOTIF_DB, process.env.NOTIF_DB + '-wal', process.env.NOTIF_DB + '-shm']) { try { fs.rmSync(f, { force: true }); } catch (e) { /* ok */ } }
+  for (const f of [process.env.NOTIF_DB, process.env.NOTIF_DB + '-wal', process.env.NOTIF_DB + '-shm', process.env.PAG_DB, process.env.PAG_DB + '-wal', process.env.PAG_DB + '-shm']) { try { fs.rmSync(f, { force: true }); } catch (e) { /* ok */ } }
   try { fs.rmSync(tmp, { force: true }); fs.rmSync(tmp + '-wal', { force: true }); fs.rmSync(tmp + '-shm', { force: true }); } catch (e) { /* ok */ }
   process.exit(process.exitCode || 0);
 })();

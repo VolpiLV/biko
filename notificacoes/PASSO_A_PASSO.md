@@ -62,6 +62,8 @@ Em `notificacoes/server.js` fica a tabela `ACOES`, uma regra por ação. O **tí
 | iniciar | Atendimento iniciado | cliente |
 | preciso de mais tempo | Tempo prorrogado | cliente |
 | remarcação em cascata | Horário remarcado | cliente |
+| pagamento aprovado (microsserviço de pagamentos) | Pagamento recebido | prestador |
+| estorno de pedido pago cancelado | Pagamento estornado | a outra parte |
 
 Duas regras valem para todas:
 

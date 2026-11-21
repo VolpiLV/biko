@@ -1,5 +1,6 @@
-// Sobe os DOIS processos de uma vez (atalho para a apresentação):
+// Sobe os TRÊS processos de uma vez (atalho para a apresentação):
 //   - microsserviço de notificações  -> http://127.0.0.1:3001
+//   - microsserviço de pagamentos    -> http://127.0.0.1:3002 (simulado)
 //   - API principal + site do Biko   -> http://localhost:3000
 // Cada um continua sendo um processo separado; dá para derrubar um sem derrubar o outro.
 const { spawn } = require('child_process');
@@ -7,6 +8,7 @@ const path = require('path');
 
 const procs = [
   { nome: 'notificacoes', script: path.join(__dirname, 'notificacoes', 'server.js') },
+  { nome: 'pagamentos', script: path.join(__dirname, 'pagamentos', 'server.js') },
   { nome: 'api', script: path.join(__dirname, 'server.js') },
 ].map(({ nome, script }) => {
   const p = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', script], { stdio: ['ignore', 'pipe', 'pipe'] });
