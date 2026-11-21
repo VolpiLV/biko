@@ -12,3 +12,4 @@ pagamentos/pagamentos.db-wal
 node_modules/
 .env
 *.env
+demo-navegador/saida/
