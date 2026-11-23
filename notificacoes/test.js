@@ -6,6 +6,7 @@ const assert = require('assert');
 
 const tmp = path.join(os.tmpdir(), `notif-ms-test-${Date.now()}.db`);
 process.env.NOTIF_DB = tmp;
+process.env.BIKO_FIRESTORE = 'memoria';
 const server = require('./server');
 const KEY = { 'X-Service-Key': 'biko-dev-key' };
 

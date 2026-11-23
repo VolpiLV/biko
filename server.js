@@ -3,10 +3,10 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { db, hashPassword, verifyPassword, tx } = require('./db');
+const { T, pronto, newUser, hashPassword, verifyPassword, tx } = require('./db');
+const { modoFirestore } = require('./firebase');
 const { chamarServico, ServicoForaDoAr } = require('./servicos');
 const notificador = require('./notificador'); // ponte com o microsserviço de notificações (pasta notificacoes/)
-notificador.preencherInicial();
 
 const COOKIE = 'biko_sid';
 const SESSION_MS = 7 * 24 * 60 * 60 * 1000; // sessão persistida por 7 dias
@@ -92,9 +92,10 @@ function validateProfile({ name, email, phone }) {
   return errors;
 }
 
-function createSession(userId) {
+// Sessão = documento sessions/<token> no Firestore
+async function createSession(userId) {
   const token = newToken();
-  db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)').run(token, userId, now() + SESSION_MS);
+  await T.sessions.set(token, { token, user_id: userId, expires_at: now() + SESSION_MS });
   return token;
 }
 
@@ -102,8 +103,8 @@ function createSession(userId) {
 // (para guardar no flutter_secure_storage). O navegador continua só com cookie HttpOnly,
 // assim o JavaScript da página web nunca enxerga o token.
 const wantsBearer = (req) => String(req.headers['x-client'] || '').toLowerCase() === 'mobile';
-function startSession(ctx, userId) {
-  const token = createSession(userId);
+async function startSession(ctx, userId) {
+  const token = await createSession(userId);
   if (wantsBearer(ctx.req)) return { token, token_type: 'Bearer', expires_at: now() + SESSION_MS };
   ctx.headers['Set-Cookie'] = sessionCookie(token);
   return {};
@@ -142,27 +143,54 @@ function readToken(req) {
   }
   return parseCookies(req)[COOKIE];
 }
-function authenticate(ctx) {
+async function authenticate(ctx) {
   const token = readToken(ctx.req);
   if (!token) fail(401, 'Não autenticado.');
-  const row = db.prepare('SELECT u.*, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?').get(token);
-  if (!row || row.expires_at < now()) {
-    if (row) db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+  const s = await T.sessions.get(token);
+  const u = s ? await T.users.get(s.user_id) : undefined;
+  if (!s || !u || s.expires_at < now()) {
+    if (s) await T.sessions.remove(token);
     ctx.headers['Set-Cookie'] = clearCookie();
     fail(401, 'Sessão expirada. Faça login novamente.');
   }
-  if (!row.active) {
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.id);
+  if (!u.active) {
+    await T.sessions.removeWhere('user_id', '==', u.id);
     ctx.headers['Set-Cookie'] = clearCookie();
     fail(403, 'Sua conta está desativada.');
   }
-  ctx.user = row;
+  ctx.user = u;
   ctx.token = token;
 }
 
-function categoryList() {
-  const counts = Object.fromEntries(db.prepare(`SELECT s.category, COUNT(*) AS n FROM services s JOIN users u ON u.id = s.provider_id
-    WHERE s.active = 1 AND u.active = 1 AND u.role = 'prestador' GROUP BY s.category`).all().map((r) => [r.category, r.n]));
+// ---------- leituras com "join" (no Firestore os dados relacionados são buscados à parte) ----------
+const usersById = async () => new Map((await T.users.all()).map((u) => [u.id, u]));
+// Serviço + dados do prestador (era o SELECT ... JOIN users)
+function withProvider(s, um) {
+  const u = um.get(s.provider_id) || {};
+  return { ...s, provider_name: u.name, provider_photo_v: u.photo_v || 0, u_active: u.active, u_role: u.role };
+}
+// Serviços que aparecem para o cliente: ativos e de prestador ativo
+async function publicServices() {
+  const um = await usersById();
+  return (await T.services.where('active', '==', 1)).map((s) => withProvider(s, um)).filter((s) => s.u_active && s.u_role === 'prestador');
+}
+// Pedido + nome/telefone/foto do cliente e do prestador (era o ORDER_SELECT com JOIN)
+function withPeople(o, um) {
+  const c = um.get(o.client_id) || {}, p = um.get(o.provider_id) || {};
+  return { ...o, client_name: c.name, client_phone: c.phone, client_photo_v: c.photo_v || 0, provider_name: p.name, provider_phone: p.phone, provider_photo_v: p.photo_v || 0 };
+}
+async function orderRow(id) {
+  const o = await T.orders.get(id);
+  if (!o) return undefined;
+  const [c, p] = await Promise.all([T.users.get(o.client_id), T.users.get(o.provider_id)]);
+  return withPeople(o, new Map([[o.client_id, c || {}], [o.provider_id, p || {}]]));
+}
+const byStartDesc = (a, b) => b.start_ts - a.start_ts || b.id - a.id;
+const isActive = (o) => o.status === 'pendente' || o.status === 'confirmado';
+
+async function categoryList() {
+  const counts = {};
+  for (const s of await publicServices()) counts[s.category] = (counts[s.category] || 0) + 1;
   return CATEGORIES.map((c) => ({ ...c, total: counts[c.nome] || 0 }));
 }
 
@@ -174,9 +202,10 @@ function route(method, pattern, opts, handler) {
   const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '$');
   routes.push({ method, re, keys, opts, handler });
 }
+const emailTaken = async (mail, exceptId) => (await T.users.where('email', '==', mail)).some((u) => u.id !== exceptId);
 
 // ----- AUTENTICAÇÃO -----
-route('POST', '/api/auth/register', {}, (ctx) => {
+route('POST', '/api/auth/register', {}, async (ctx) => {
   const { name, email, phone, password, role } = ctx.body;
   const errors = validateProfile({ name, email, phone });
   const pwErr = validatePassword(password);
@@ -185,107 +214,112 @@ route('POST', '/api/auth/register', {}, (ctx) => {
   // Auto-cadastro só permite cliente ou prestador; admin nunca é criado por aqui.
   const finalRole = role === 'prestador' ? 'prestador' : 'cliente';
   const mail = email.trim().toLowerCase();
-  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(mail)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
-  const info = db.prepare('INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)')
-    .run(name.trim(), mail, phone || null, hashPassword(password), finalRole);
-  const session = startSession(ctx, info.lastInsertRowid);
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-  return [201, { user: publicUser(user), ...session }];
+  const id = await tx(async () => {
+    if (await emailTaken(mail)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
+    return T.users.insert(newUser(name.trim(), mail, phone, password, finalRole));
+  });
+  const session = await startSession(ctx, id);
+  return [201, { user: publicUser(await T.users.get(id)), ...session }];
 });
 
-route('POST', '/api/auth/login', {}, (ctx) => {
+route('POST', '/api/auth/login', {}, async (ctx) => {
   const { email, password } = ctx.body;
   if (!email || !password) fail(400, 'Informe e-mail e senha.');
   const mail = String(email).trim().toLowerCase();
   const key = `${mail}|${ctx.req.socket.remoteAddress}`;
   if (tooManyAttempts(key)) fail(429, 'Muitas tentativas. Aguarde alguns minutos e tente novamente.');
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(mail);
+  const user = await T.users.first('email', '==', mail);
   if (!user || !verifyPassword(String(password), user.password_hash)) {
     registerFailure(key);
     fail(401, 'E-mail ou senha inválidos.'); // mensagem genérica de propósito
   }
   if (!user.active) fail(403, 'Sua conta está desativada. Fale com o administrador.');
   attempts.delete(key);
-  return [200, { user: publicUser(user), ...startSession(ctx, user.id) }];
+  return [200, { user: publicUser(user), ...(await startSession(ctx, user.id)) }];
 });
 
-route('POST', '/api/auth/logout', { auth: true }, (ctx) => {
-  db.prepare('DELETE FROM sessions WHERE token = ?').run(ctx.token);
+route('POST', '/api/auth/logout', { auth: true }, async (ctx) => {
+  await T.sessions.remove(ctx.token);
   ctx.headers['Set-Cookie'] = clearCookie();
   return [200, { ok: true }];
 });
 
 route('GET', '/api/auth/me', { auth: true }, (ctx) => [200, { user: publicUser(ctx.user) }]);
 
-route('POST', '/api/auth/forgot', {}, (ctx) => {
+route('POST', '/api/auth/forgot', {}, async (ctx) => {
   const mail = String(ctx.body.email || '').trim().toLowerCase();
   if (!EMAIL_RE.test(mail)) fail(400, 'Informe um e-mail válido.');
-  const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(mail);
+  const user = (await T.users.where('email', '==', mail)).find((u) => u.active);
   const out = { message: 'Se o e-mail estiver cadastrado, enviaremos as instruções de recuperação.' };
   if (user) {
     const token = newToken().slice(0, 24);
-    db.prepare('INSERT INTO password_resets (token, user_id, expires_at) VALUES (?,?,?)').run(token, user.id, now() + RESET_MS);
+    await T.resets.set(token, { token, user_id: user.id, expires_at: now() + RESET_MS, used: 0 });
     console.log(`[recuperação de senha] ${mail} -> código: ${token}`);
     if (SHOW_RESET_TOKEN) out.devToken = token; // apenas para demonstração
   }
   return [200, out]; // mesma resposta existindo ou não (não revela quais e-mails existem)
 });
 
-route('POST', '/api/auth/reset', {}, (ctx) => {
+route('POST', '/api/auth/reset', {}, async (ctx) => {
   const { token, password } = ctx.body;
   const pwErr = validatePassword(password);
   if (pwErr) fail(400, pwErr);
-  const r = db.prepare('SELECT * FROM password_resets WHERE token = ?').get(String(token || ''));
+  const tk = String(token || '');
+  const r = /^[a-f0-9]{1,64}$/i.test(tk) ? await T.resets.get(tk) : undefined;
   if (!r || r.used || r.expires_at < now()) fail(400, 'Código inválido ou expirado. Solicite um novo.');
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), r.user_id);
-  db.prepare('UPDATE password_resets SET used = 1 WHERE token = ?').run(r.token);
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(r.user_id); // derruba sessões antigas
+  await T.users.update(r.user_id, { password_hash: hashPassword(password) });
+  await T.resets.update(r.token, { used: 1 });
+  await T.sessions.removeWhere('user_id', '==', r.user_id); // derruba sessões antigas
   return [200, { ok: true, message: 'Senha redefinida com sucesso. Faça login.' }];
 });
 
 // ----- ÁREAS POR PERFIL (controle de acesso no backend) -----
 // avisos: pedidos ativos do cliente que o prestador adiou (aviso de atraso ou remarcação em cascata)
-route('GET', '/api/cliente/home', { auth: true, roles: ['cliente', 'admin'] }, (ctx) => {
-  const avisos = db.prepare(`${ORDER_SELECT} WHERE o.client_id = ? AND o.status IN ('pendente','confirmado') AND o.delay_min > 0 AND o.end_ts > ?
-    ORDER BY o.start_ts LIMIT 5`).all(ctx.user.id, now()).map((o) => orderView(o, ctx.user));
-  return [200, { categorias: categoryList(), avisos }];
+route('GET', '/api/cliente/home', { auth: true, roles: ['cliente', 'admin'] }, async (ctx) => {
+  const t = now();
+  const mine = (await T.orders.where('client_id', '==', ctx.user.id))
+    .filter((o) => isActive(o) && o.delay_min > 0 && o.end_ts > t).sort((a, b) => a.start_ts - b.start_ts).slice(0, 5);
+  const um = await usersById();
+  const avisos = mine.map((o) => orderView(withPeople(o, um), ctx.user));
+  return [200, { categorias: await categoryList(), avisos }];
 });
 
-route('GET', '/api/prestador/painel', { auth: true, roles: ['prestador', 'admin'] }, (ctx) => {
+route('GET', '/api/prestador/painel', { auth: true, roles: ['prestador', 'admin'] }, async (ctx) => {
   const id = ctx.user.id;
   const d = new Date(); const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
-  const novos = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE provider_id = ? AND status = 'pendente'").get(id).n;
-  const ganhos = db.prepare("SELECT COALESCE(SUM(price_cents), 0) AS s FROM orders WHERE provider_id = ? AND status = 'concluido' AND completed_ts >= ?").get(id, monthStart).s;
-  const proximos = db.prepare(`${ORDER_SELECT} WHERE o.provider_id = ? AND o.status = 'confirmado' ORDER BY o.start_ts LIMIT 3`).all(id).map((o) => orderView(o, ctx.user));
+  const mine = await T.orders.where('provider_id', '==', id);
+  const novos = mine.filter((o) => o.status === 'pendente').length;
+  const ganhos = mine.filter((o) => o.status === 'concluido' && o.completed_ts >= monthStart).reduce((s, o) => s + o.price_cents, 0);
+  const um = await usersById();
+  const proximos = mine.filter((o) => o.status === 'confirmado').sort((a, b) => a.start_ts - b.start_ts).slice(0, 3).map((o) => orderView(withPeople(o, um), ctx.user));
   return [200, { resumo: { pedidosNovos: novos, avaliacao: null, ganhosMes: ganhos / 100 }, proximos, mensagem: 'Aqui o prestador acompanha pedidos e ganhos.' }];
 });
 
 // ----- GESTÃO DE USUÁRIOS (somente admin) -----
-route('GET', '/api/users', { auth: true, roles: ['admin'] }, (ctx) => {
+route('GET', '/api/users', { auth: true, roles: ['admin'] }, async (ctx) => {
   const { search = '', role = '', status = '' } = ctx.query;
-  const where = [];
-  const params = [];
-  if (search) { where.push('(name LIKE ? OR email LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
-  if (ROLES.includes(role)) { where.push('role = ?'); params.push(role); }
-  if (status === 'ativo') where.push('active = 1');
-  if (status === 'inativo') where.push('active = 0');
   const page = parsePage(ctx.query);
-  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = db.prepare(`SELECT COUNT(*) AS n FROM users ${whereSql}`).get(...params).n;
-  // id no ORDER BY desempata nomes iguais, senão a mesma pessoa poderia aparecer em duas páginas
-  const rows = db.prepare(`SELECT * FROM users ${whereSql} ORDER BY name COLLATE NOCASE, id LIMIT ? OFFSET ?`).all(...params, page.limit, page.offset);
-  return [200, { users: rows.map(publicUser), ...pageInfo(total, page) }];
+  const s = String(search).toLowerCase();
+  const rows = (await T.users.all())
+    .filter((u) => !s || u.name.toLowerCase().includes(s) || u.email.toLowerCase().includes(s))
+    .filter((u) => !ROLES.includes(role) || u.role === role)
+    .filter((u) => (status === 'ativo' ? u.active : status === 'inativo' ? !u.active : true))
+    // id desempata nomes iguais, senão a mesma pessoa poderia aparecer em duas páginas
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }) || a.id - b.id);
+  return [200, { users: rows.slice(page.offset, page.offset + page.limit).map(publicUser), ...pageInfo(rows.length, page) }];
 });
 
-// Números do painel do admin calculados no banco (não depende de baixar listas inteiras)
-route('GET', '/api/admin/resumo', { auth: true, roles: ['admin'] }, () => {
-  const u = db.prepare(`SELECT SUM(role = 'cliente') AS clientes, SUM(role = 'prestador') AS prestadores, SUM(active = 0) AS desativados FROM users`).get();
-  const o = db.prepare(`SELECT COUNT(*) AS pedidos, SUM(status = 'pendente') AS pendentes, SUM(status = 'concluido') AS concluidos FROM orders`).get();
-  const n = (v) => Number(v || 0);
-  return [200, { clientes: n(u.clientes), prestadores: n(u.prestadores), desativados: n(u.desativados), pedidos: n(o.pedidos), pendentes: n(o.pendentes), concluidos: n(o.concluidos) }];
+// Números do painel do admin
+route('GET', '/api/admin/resumo', { auth: true, roles: ['admin'] }, async () => {
+  const us = await T.users.all(), os = await T.orders.all();
+  return [200, {
+    clientes: us.filter((u) => u.role === 'cliente').length, prestadores: us.filter((u) => u.role === 'prestador').length,
+    desativados: us.filter((u) => !u.active).length, pedidos: os.length,
+    pendentes: os.filter((o) => o.status === 'pendente').length, concluidos: os.filter((o) => o.status === 'concluido').length,
+  }];
 });
 
-route('POST', '/api/users', { auth: true, roles: ['admin'] }, (ctx) => {
+route('POST', '/api/users', { auth: true, roles: ['admin'] }, async (ctx) => {
   const { name, email, phone, password, role } = ctx.body;
   const errors = validateProfile({ name, email, phone });
   const pwErr = validatePassword(password);
@@ -293,15 +327,16 @@ route('POST', '/api/users', { auth: true, roles: ['admin'] }, (ctx) => {
   if (!ROLES.includes(role)) errors.role = 'Perfil inválido.';
   if (Object.keys(errors).length) fail(400, 'Dados inválidos.', errors);
   const mail = email.trim().toLowerCase();
-  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(mail)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
-  const info = db.prepare('INSERT INTO users (name, email, phone, password_hash, role) VALUES (?,?,?,?,?)')
-    .run(name.trim(), mail, phone || null, hashPassword(password), role);
-  return [201, { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid)) }];
+  const id = await tx(async () => {
+    if (await emailTaken(mail)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
+    return T.users.insert(newUser(name.trim(), mail, phone, password, role));
+  });
+  return [201, { user: publicUser(await T.users.get(id)) }];
 });
 
-route('PATCH', '/api/users/:id', { auth: true, roles: ['admin'] }, (ctx) => {
+route('PATCH', '/api/users/:id', { auth: true, roles: ['admin'] }, async (ctx) => {
   const id = Number(ctx.params.id);
-  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  const target = Number.isInteger(id) ? await T.users.get(id) : undefined;
   if (!target) fail(404, 'Usuário não encontrado.');
   const b = ctx.body;
   const next = {
@@ -319,21 +354,20 @@ route('PATCH', '/api/users/:id', { auth: true, roles: ['admin'] }, (ctx) => {
     fail(400, 'Você não pode desativar nem remover o perfil de admin da sua própria conta.');
   }
   const mail = String(next.email).trim().toLowerCase();
-  if (db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').get(mail, id)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
-  db.prepare('UPDATE users SET name=?, email=?, phone=?, role=?, active=? WHERE id=?')
-    .run(String(next.name).trim(), mail, next.phone || null, next.role, next.active, id);
+  if (await emailTaken(mail, id)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
+  await T.users.update(id, { name: String(next.name).trim(), email: mail, phone: next.phone || null, role: next.role, active: next.active });
   // Desativou ou mudou de perfil -> derruba as sessões abertas dessa pessoa
-  if (!next.active || next.role !== target.role) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
-  return [200, { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id)) }];
+  if (!next.active || next.role !== target.role) await T.sessions.removeWhere('user_id', '==', id);
+  return [200, { user: publicUser(await T.users.get(id)) }];
 });
 
-route('POST', '/api/users/:id/password', { auth: true, roles: ['admin'] }, (ctx) => {
+route('POST', '/api/users/:id/password', { auth: true, roles: ['admin'] }, async (ctx) => {
   const pwErr = validatePassword(ctx.body.password);
   if (pwErr) fail(400, pwErr);
   const id = Number(ctx.params.id);
-  if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(id)) fail(404, 'Usuário não encontrado.');
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(ctx.body.password), id);
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+  if (!Number.isInteger(id) || !(await T.users.get(id))) fail(404, 'Usuário não encontrado.');
+  await T.users.update(id, { password_hash: hashPassword(ctx.body.password) });
+  await T.sessions.removeWhere('user_id', '==', id);
   return [200, { ok: true }];
 });
 
@@ -350,7 +384,7 @@ function sniffImage(buf) {
   return null;
 }
 
-route('PATCH', '/api/me', { auth: true }, (ctx) => {
+route('PATCH', '/api/me', { auth: true }, async (ctx) => {
   const u = ctx.user, b = ctx.body;
   const next = {
     name: b.name !== undefined ? b.name : u.name,
@@ -367,14 +401,13 @@ route('PATCH', '/api/me', { auth: true }, (ctx) => {
     else if (!verifyPassword(String(b.currentPassword), u.password_hash)) { registerFailure(key); errors.currentPassword = 'Senha atual incorreta.'; }
   }
   if (Object.keys(errors).length) fail(400, 'Dados inválidos.', errors);
-  if (db.prepare('SELECT 1 FROM users WHERE email = ? AND id != ?').get(mail, u.id)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
+  if (await emailTaken(mail, u.id)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
   // perfil e status não entram aqui de propósito: ninguém muda o próprio perfil por esta rota
-  db.prepare('UPDATE users SET name = ?, email = ?, phone = ? WHERE id = ?')
-    .run(String(next.name).trim(), mail, next.phone ? String(next.phone).trim() : null, u.id);
-  return [200, { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id)) }];
+  await T.users.update(u.id, { name: String(next.name).trim(), email: mail, phone: next.phone ? String(next.phone).trim() : null });
+  return [200, { user: publicUser(await T.users.get(u.id)) }];
 });
 
-route('POST', '/api/me/password', { auth: true }, (ctx) => {
+route('POST', '/api/me/password', { auth: true }, async (ctx) => {
   const u = ctx.user;
   const { currentPassword, newPassword } = ctx.body;
   const key = `pwd|${u.id}`;
@@ -387,13 +420,13 @@ route('POST', '/api/me/password', { auth: true }, (ctx) => {
   if (pwErr) fail(400, 'Dados inválidos.', { newPassword: pwErr });
   if (newPassword === currentPassword) fail(400, 'Dados inválidos.', { newPassword: 'A nova senha deve ser diferente da atual.' });
   attempts.delete(key);
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), u.id);
+  await T.users.update(u.id, { password_hash: hashPassword(newPassword) });
   // derruba as OUTRAS sessões (outros aparelhos); a atual continua valendo
-  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(u.id, ctx.token);
+  for (const s of await T.sessions.where('user_id', '==', u.id)) if (s.token !== ctx.token) await T.sessions.remove(s.token);
   return [200, { ok: true, message: 'Senha alterada com sucesso.' }];
 });
 
-route('PUT', '/api/me/photo', { auth: true, bodyLimit: 400 * 1024 }, (ctx) => {
+route('PUT', '/api/me/photo', { auth: true, bodyLimit: 400 * 1024 }, async (ctx) => {
   const m = /^data:(image\/[a-z]+);base64,([A-Za-z0-9+/=]+)$/.exec(String(ctx.body.image || ''));
   if (!m || !PHOTO_TYPES[m[1]]) fail(400, 'Envie uma imagem PNG, JPG ou WEBP.');
   const buf = Buffer.from(m[2], 'base64');
@@ -401,21 +434,22 @@ route('PUT', '/api/me/photo', { auth: true, bodyLimit: 400 * 1024 }, (ctx) => {
   if (buf.length > MAX_PHOTO_BYTES) fail(413, 'A foto deve ter no máximo 200 KB.');
   const real = sniffImage(buf);
   if (!real) fail(400, 'O arquivo enviado não é uma imagem válida.');
-  db.prepare('INSERT INTO user_photos (user_id, mime, data) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data')
-    .run(ctx.user.id, real, buf);
-  db.prepare('UPDATE users SET photo_v = photo_v + 1 WHERE id = ?').run(ctx.user.id);
-  return [200, { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(ctx.user.id)) }];
+  // A foto fica num documento separado (user_photos/<id do usuário>) para não pesar nas listas
+  await T.photos.set(ctx.user.id, { user_id: ctx.user.id, mime: real, data: buf });
+  await T.users.update(ctx.user.id, { photo_v: (ctx.user.photo_v || 0) + 1 });
+  return [200, { user: publicUser(await T.users.get(ctx.user.id)) }];
 });
 
-route('DELETE', '/api/me/photo', { auth: true }, (ctx) => {
-  db.prepare('DELETE FROM user_photos WHERE user_id = ?').run(ctx.user.id);
-  db.prepare('UPDATE users SET photo_v = 0 WHERE id = ?').run(ctx.user.id);
-  return [200, { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(ctx.user.id)) }];
+route('DELETE', '/api/me/photo', { auth: true }, async (ctx) => {
+  await T.photos.remove(ctx.user.id);
+  await T.users.update(ctx.user.id, { photo_v: 0 });
+  return [200, { user: publicUser(await T.users.get(ctx.user.id)) }];
 });
 
 // Qualquer usuário logado pode ver a foto dos outros (aparece nos resultados de busca e nos pedidos)
-route('GET', '/api/photo/:id', { auth: true }, (ctx) => {
-  const p = db.prepare('SELECT mime, data FROM user_photos WHERE user_id = ?').get(Number(ctx.params.id));
+route('GET', '/api/photo/:id', { auth: true }, async (ctx) => {
+  const id = Number(ctx.params.id);
+  const p = Number.isInteger(id) ? await T.photos.get(id) : undefined;
   if (!p) fail(404, 'Sem foto.');
   return [200, Buffer.from(p.data), { contentType: p.mime }];
 });
@@ -428,8 +462,12 @@ const serviceView = (r) => ({
   title: r.title, category: r.category, description: r.description,
   price: r.price_cents / 100, duration_min: r.duration_min, active: !!r.active,
 });
-const SERVICE_SELECT = `SELECT s.*, u.name AS provider_name, u.photo_v AS provider_photo_v
-  FROM services s JOIN users u ON u.id = s.provider_id`;
+async function serviceRow(id) {
+  const s = await T.services.get(id);
+  if (!s) return undefined;
+  const u = await T.users.get(s.provider_id);
+  return withProvider(s, new Map([[s.provider_id, u || {}]]));
+}
 
 function validateService(b) {
   const e = {};
@@ -443,25 +481,31 @@ function validateService(b) {
   return e;
 }
 
-route('GET', '/api/categories', { auth: true }, () => [200, { categories: categoryList() }]);
+route('GET', '/api/categories', { auth: true }, async () => [200, { categories: await categoryList() }]);
 
-route('GET', '/api/services/mine', { auth: true, roles: ['prestador'] }, (ctx) => {
-  const rows = db.prepare(`${SERVICE_SELECT} WHERE s.provider_id = ? ORDER BY s.active DESC, s.title COLLATE NOCASE`).all(ctx.user.id);
-  return [200, { services: rows.map((r) => ({ ...serviceView(r), real_stats: serviceStats(r.id) })) }];
+route('GET', '/api/services/mine', { auth: true, roles: ['prestador'] }, async (ctx) => {
+  const um = new Map([[ctx.user.id, ctx.user]]);
+  const rows = (await T.services.where('provider_id', '==', ctx.user.id))
+    .sort((a, b) => b.active - a.active || a.title.localeCompare(b.title, 'pt-BR', { sensitivity: 'base' }));
+  const out = [];
+  for (const r of rows) out.push({ ...serviceView(withProvider(r, um)), real_stats: await serviceStats(r.id) });
+  return [200, { services: out }];
 });
 
-route('POST', '/api/services', { auth: true, roles: ['prestador'] }, (ctx) => {
+route('POST', '/api/services', { auth: true, roles: ['prestador'] }, async (ctx) => {
   const b = ctx.body;
   const errors = validateService(b);
   if (Object.keys(errors).length) fail(400, 'Dados inválidos.', errors);
-  const info = db.prepare('INSERT INTO services (provider_id, title, category, description, price_cents, duration_min) VALUES (?,?,?,?,?,?)')
-    .run(ctx.user.id, b.title.trim(), b.category, String(b.description || '').trim(), Math.round(Number(b.price) * 100), Number(b.duration_min));
-  return [201, { service: serviceView(db.prepare(`${SERVICE_SELECT} WHERE s.id = ?`).get(info.lastInsertRowid)) }];
+  const id = await T.services.insert({
+    provider_id: ctx.user.id, title: b.title.trim(), category: b.category, description: String(b.description || '').trim(),
+    price_cents: Math.round(Number(b.price) * 100), duration_min: Number(b.duration_min), active: 1, created_at: new Date().toISOString(),
+  });
+  return [201, { service: serviceView(await serviceRow(id)) }];
 });
 
-route('PATCH', '/api/services/:id', { auth: true, roles: ['prestador'] }, (ctx) => {
+route('PATCH', '/api/services/:id', { auth: true, roles: ['prestador'] }, async (ctx) => {
   const id = Number(ctx.params.id);
-  const s = db.prepare('SELECT * FROM services WHERE id = ?').get(id);
+  const s = Number.isInteger(id) ? await T.services.get(id) : undefined;
   if (!s) fail(404, 'Serviço não encontrado.');
   if (s.provider_id !== ctx.user.id) fail(403, 'Este serviço pertence a outro prestador.');
   const b = ctx.body;
@@ -475,18 +519,20 @@ route('PATCH', '/api/services/:id', { auth: true, roles: ['prestador'] }, (ctx) 
   const errors = validateService(next);
   if (Object.keys(errors).length) fail(400, 'Dados inválidos.', errors);
   const active = b.active !== undefined ? (b.active ? 1 : 0) : s.active;
-  db.prepare('UPDATE services SET title=?, category=?, description=?, price_cents=?, duration_min=?, active=? WHERE id=?')
-    .run(next.title.trim(), next.category, String(next.description || '').trim(), Math.round(Number(next.price) * 100), Number(next.duration_min), active, id);
-  return [200, { service: serviceView(db.prepare(`${SERVICE_SELECT} WHERE s.id = ?`).get(id)) }];
+  await T.services.update(id, {
+    title: next.title.trim(), category: next.category, description: String(next.description || '').trim(),
+    price_cents: Math.round(Number(next.price) * 100), duration_min: Number(next.duration_min), active,
+  });
+  return [200, { service: serviceView(await serviceRow(id)) }];
 });
 
 // =====================================================================
 // 6. BUSCA (sobre os serviços reais cadastrados, sem acento e sem diferenciar maiúscula)
 // =====================================================================
-const norm = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 const SORTS = ['relevancia', 'preco_asc', 'preco_desc', 'nome'];
 
-route('GET', '/api/search', { auth: true }, (ctx) => {
+route('GET', '/api/search', { auth: true }, async (ctx) => {
   const { q = '', category = '', max_price = '', sort = '' } = ctx.query;
   if (q.length > 80) fail(400, 'A busca pode ter no máximo 80 caracteres.');
   if (category && !CATEGORY_NAMES.includes(category)) fail(400, 'Categoria inválida.');
@@ -500,11 +546,9 @@ route('GET', '/api/search', { auth: true }, (ctx) => {
   const limit = Math.min(Math.max(parseInt(ctx.query.limit, 10) || 20, 1), 50);
   const offset = Math.max(parseInt(ctx.query.offset, 10) || 0, 0);
 
-  const where = ["s.active = 1", "u.active = 1", "u.role = 'prestador'"];
-  const params = [];
-  if (category) { where.push('s.category = ?'); params.push(category); }
-  if (maxCents !== null) { where.push('s.price_cents <= ?'); params.push(maxCents); }
-  let rows = db.prepare(`${SERVICE_SELECT} WHERE ${where.join(' AND ')}`).all(...params);
+  let rows = (await publicServices())
+    .filter((s) => !category || s.category === category)
+    .filter((s) => maxCents === null || s.price_cents <= maxCents);
 
   // Cada palavra digitada precisa aparecer em algum campo (título, categoria, descrição ou nome do prestador)
   const terms = norm(q).split(/\s+/).filter(Boolean);
@@ -530,14 +574,15 @@ route('GET', '/api/search', { auth: true }, (ctx) => {
 });
 
 // Horários já ocupados de um prestador em um dia (sem expor dados de quem agendou)
-route('GET', '/api/providers/:id/agenda', { auth: true }, (ctx) => {
+route('GET', '/api/providers/:id/agenda', { auth: true }, async (ctx) => {
   const day = parseLocal(ctx.query.date, '00:00');
   if (!day) fail(400, 'Informe a data no formato AAAA-MM-DD.');
   const from = day.getTime(), to = from + 24 * 3600e3;
-  const rows = db.prepare(`SELECT start_ts, end_ts FROM orders WHERE provider_id = ? AND status IN ('pendente','confirmado')
-    AND start_ts < ? AND end_ts > ? ORDER BY start_ts`).all(Number(ctx.params.id), to, from);
+  const rows = (await T.orders.where('provider_id', '==', Number(ctx.params.id)))
+    .filter((o) => isActive(o) && o.start_ts < to && o.end_ts > from).sort((a, b) => a.start_ts - b.start_ts);
   return [200, { date: ctx.query.date, busy: rows.map((r) => ({ start: fmtTime(r.start_ts), end: fmtTime(r.end_ts) })) }];
 });
+
 
 // =====================================================================
 // 5. AGENDAMENTO / PEDIDOS (regras de negócio)
@@ -592,10 +637,6 @@ function parseLocal(date, time) {
   return dt;
 }
 
-const ORDER_SELECT = `SELECT o.*, c.name AS client_name, c.phone AS client_phone, c.photo_v AS client_photo_v,
-    p.name AS provider_name, p.phone AS provider_phone, p.photo_v AS provider_photo_v
-  FROM orders o JOIN users c ON c.id = o.client_id JOIN users p ON p.id = o.provider_id`;
-
 // Cliente: pedido confirmado só até 2 h antes, EXCETO se o horário foi remarcado por atraso
 // do prestador (aí pode cancelar sem restrição). Atendimento já iniciado não dá para cancelar.
 function clientMayCancel(o, t) {
@@ -648,34 +689,36 @@ function orderView(o, user) {
   };
 }
 
-function loadOrderFor(user, id) {
-  const o = db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(id);
+async function loadOrderFor(user, id) {
+  const o = Number.isInteger(id) ? await orderRow(id) : undefined;
   // quem não participa do pedido (e não é admin) recebe 404, como se ele não existisse
   if (!o || !(user.role === 'admin' || o.client_id === user.id || o.provider_id === user.id)) fail(404, 'Pedido não encontrado.');
   return o;
 }
-function addEvent(orderId, status, actorId, note) {
-  const info = db.prepare('INSERT INTO order_events (order_id, status, actor_id, note, created_at) VALUES (?,?,?,?,?)').run(orderId, status, actorId, note || null, now());
+async function addEvent(orderId, status, actorId, note) {
+  const id = await T.events.insert({ order_id: orderId, status, actor_id: actorId ?? null, note: note || null, created_at: now() });
   // Todo evento do pedido também vai para a caixa de saída do microsserviço de notificações
-  // (mesma transação: se o pedido não gravar, a notificação também não existe).
-  notificador.publicar(info.lastInsertRowid, orderId, status, actorId, note);
+  await notificador.publicar(id, orderId, status, actorId, note);
 }
 
 // O atendimento passou do horário (prorrogação ou início atrasado): empurra os próximos pedidos
 // ativos do prestador que agora se sobrepõem, em cascata. Um intervalo livre entre pedidos
 // absorve o atraso e a cascata para ali. Cada cliente afetado ganha um registro no histórico
-// e pode cancelar sem a regra das 2 h. Roda dentro da transação de quem chamou.
-function pushFollowing(o, newEnd) {
-  const next = db.prepare(`SELECT * FROM orders WHERE provider_id = ? AND id != ? AND status IN ('pendente','confirmado')
-    AND started_ts IS NULL AND start_ts >= ? ORDER BY start_ts, id`).all(o.provider_id, o.id, o.start_ts);
+// e pode cancelar sem a regra das 2 h.
+async function pushFollowing(o, newEnd) {
+  const next = (await T.orders.where('provider_id', '==', o.provider_id))
+    .filter((r) => r.id !== o.id && isActive(r) && !r.started_ts && r.start_ts >= o.start_ts)
+    .sort((a, b) => a.start_ts - b.start_ts || a.id - b.id);
   let cursor = newEnd, moved = 0;
   for (const r of next) {
     if (r.start_ts >= cursor) break;
     const shift = Math.ceil((cursor - r.start_ts) / SHIFT_ROUND_MS) * SHIFT_ROUND_MS;
     const shiftMin = shift / 60000;
-    db.prepare('UPDATE orders SET start_ts = start_ts + ?, end_ts = end_ts + ?, planned_end_ts = COALESCE(planned_end_ts, end_ts) + ?, delay_min = delay_min + ?, delay_reason = ?, updated_at = ? WHERE id = ?')
-      .run(shift, shift, shift, shiftMin, CASCADE_REASON, now(), r.id);
-    addEvent(r.id, 'remarcado', null, `Novo horário ${fmtTime(r.start_ts + shift)}–${fmtTime(r.end_ts + shift)} (+${shiftMin} min por imprevisto no atendimento anterior). O cliente pode cancelar sem custo.`);
+    await T.orders.update(r.id, {
+      start_ts: r.start_ts + shift, end_ts: r.end_ts + shift, planned_end_ts: (r.planned_end_ts || r.end_ts) + shift,
+      delay_min: (r.delay_min || 0) + shiftMin, delay_reason: CASCADE_REASON, updated_at: now(),
+    });
+    await addEvent(r.id, 'remarcado', null, `Novo horário ${fmtTime(r.start_ts + shift)}–${fmtTime(r.end_ts + shift)} (+${shiftMin} min por imprevisto no atendimento anterior). O cliente pode cancelar sem custo.`);
     cursor = r.end_ts + shift;
     moved++;
   }
@@ -686,9 +729,11 @@ const movedNote = (n) => (n ? ` — ${n} pedido(s) seguinte(s) remarcado(s)` : '
 // Duração real dos últimos atendimentos de um serviço (iniciar -> concluir).
 // Sugere a MEDIANA arredondada para 15 min: o tempo típico, sem gordura.
 // Os imprevistos (minoria) ficam por conta da prorrogação, não da duração cadastrada.
-function serviceStats(serviceId) {
-  const rows = db.prepare(`SELECT completed_ts - started_ts AS ms, extended_min FROM orders WHERE service_id = ? AND status = 'concluido'
-    AND started_ts IS NOT NULL AND completed_ts > started_ts ORDER BY completed_ts DESC LIMIT 20`).all(serviceId);
+async function serviceStats(serviceId) {
+  const rows = (await T.orders.where('service_id', '==', serviceId))
+    .filter((o) => o.status === 'concluido' && o.started_ts && o.completed_ts > o.started_ts)
+    .sort((a, b) => b.completed_ts - a.completed_ts).slice(0, 20)
+    .map((o) => ({ ms: o.completed_ts - o.started_ts, extended_min: o.extended_min || 0 }));
   if (!rows.length) return { count: 0 };
   const mins = rows.map((r) => r.ms / 60000).sort((a, b) => a - b);
   const mid = Math.floor(mins.length / 2);
@@ -702,11 +747,11 @@ function serviceStats(serviceId) {
   };
 }
 
-route('POST', '/api/orders', { auth: true, roles: ['cliente'] }, (ctx) => {
+route('POST', '/api/orders', { auth: true, roles: ['cliente'] }, async (ctx) => {
   const b = ctx.body;
   const errors = {};
   const serviceId = Number(b.service_id);
-  const s = Number.isInteger(serviceId) ? db.prepare(`SELECT s.*, u.active AS u_active, u.role AS u_role FROM services s JOIN users u ON u.id = s.provider_id WHERE s.id = ?`).get(serviceId) : null;
+  const s = Number.isInteger(serviceId) ? await serviceRow(serviceId) : null;
   if (!s || !s.active || !s.u_active || s.u_role !== 'prestador') fail(404, 'Este serviço não está mais disponível.');
   if (s.provider_id === ctx.user.id) fail(400, 'Você não pode contratar o seu próprio serviço.');
 
@@ -729,38 +774,45 @@ route('POST', '/api/orders', { auth: true, roles: ['cliente'] }, (ctx) => {
   if (Object.keys(errors).length) fail(400, 'Dados inválidos.', errors);
 
   const startTs = start.getTime(), endTs = startTs + s.duration_min * 60000;
-  const id = tx(() => {
-    // Conflito de horário: nem o prestador nem o cliente podem ter dois pedidos ativos sobrepostos.
-    const overlap = (col, uid) => db.prepare(`SELECT 1 FROM orders WHERE ${col} = ? AND status IN ('pendente','confirmado') AND start_ts < ? AND end_ts > ?`).get(uid, endTs, startTs);
-    if (overlap('provider_id', s.provider_id)) fail(409, 'O prestador já tem um compromisso nesse horário. Escolha outro.', { time: 'Horário indisponível.' });
-    if (overlap('client_id', ctx.user.id)) fail(409, 'Você já tem outro pedido nesse horário.', { time: 'Você já tem um pedido nesse horário.' });
+  // Conflito de horário: nem o prestador nem o cliente podem ter dois pedidos ativos sobrepostos.
+  // A checagem e a gravação rodam "uma por vez" (tx): se duas pessoas pedirem o mesmo horário, só uma passa.
+  const id = await tx(async () => {
+    const overlap = async (col, uid) => (await T.orders.where(col, '==', uid)).some((o) => isActive(o) && o.start_ts < endTs && o.end_ts > startTs);
+    if (await overlap('provider_id', s.provider_id)) fail(409, 'O prestador já tem um compromisso nesse horário. Escolha outro.', { time: 'Horário indisponível.' });
+    if (await overlap('client_id', ctx.user.id)) fail(409, 'Você já tem outro pedido nesse horário.', { time: 'Você já tem um pedido nesse horário.' });
     const t = now();
-    const info = db.prepare(`INSERT INTO orders (client_id, provider_id, service_id, service_title, category, price_cents, start_ts, end_ts, address, notes, status, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?, 'pendente', ?, ?)`).run(ctx.user.id, s.provider_id, s.id, s.title, s.category, s.price_cents, startTs, endTs, address, notes, t, t);
-    addEvent(info.lastInsertRowid, 'pendente', ctx.user.id, 'Pedido criado');
-    return Number(info.lastInsertRowid);
+    const newId = await T.orders.insert({
+      client_id: ctx.user.id, provider_id: s.provider_id, service_id: s.id, service_title: s.title, category: s.category, price_cents: s.price_cents,
+      start_ts: startTs, end_ts: endTs, address, notes, status: 'pendente', status_reason: null, completed_ts: null,
+      started_ts: null, planned_end_ts: null, extended_min: 0, delay_min: 0, delay_reason: null,
+      payment_status: null, payment_id: null, payment_code: null, created_at: t, updated_at: t,
+    });
+    await addEvent(newId, 'pendente', ctx.user.id, 'Pedido criado');
+    return newId;
   });
-  return [201, { order: orderView(db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(id), ctx.user) }];
+  return [201, { order: orderView(await orderRow(id), ctx.user) }];
 });
 
-route('GET', '/api/orders', { auth: true }, (ctx) => {
+route('GET', '/api/orders', { auth: true }, async (ctx) => {
   const { status = '' } = ctx.query;
   if (status && !STATUSES.includes(status)) fail(400, 'Status inválido.');
-  const where = [], params = [];
-  if (ctx.user.role === 'cliente') { where.push('o.client_id = ?'); params.push(ctx.user.id); }
-  else if (ctx.user.role === 'prestador') { where.push('o.provider_id = ?'); params.push(ctx.user.id); }
-  if (status) { where.push('o.status = ?'); params.push(status); }
   const page = parsePage(ctx.query);
-  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = db.prepare(`SELECT COUNT(*) AS n FROM orders o ${whereSql}`).get(...params).n;
-  const rows = db.prepare(`${ORDER_SELECT} ${whereSql} ORDER BY o.start_ts DESC, o.id DESC LIMIT ? OFFSET ?`).all(...params, page.limit, page.offset);
-  return [200, { orders: rows.map((o) => orderView(o, ctx.user)), ...pageInfo(total, page) }];
+  let rows = ctx.user.role === 'cliente' ? await T.orders.where('client_id', '==', ctx.user.id)
+    : ctx.user.role === 'prestador' ? await T.orders.where('provider_id', '==', ctx.user.id)
+      : await T.orders.all();
+  if (status) rows = rows.filter((o) => o.status === status);
+  rows.sort(byStartDesc);
+  const um = await usersById();
+  return [200, { orders: rows.slice(page.offset, page.offset + page.limit).map((o) => orderView(withPeople(o, um), ctx.user)), ...pageInfo(rows.length, page) }];
 });
 
-route('GET', '/api/orders/:id', { auth: true }, (ctx) => {
-  const o = loadOrderFor(ctx.user, Number(ctx.params.id));
-  const history = db.prepare(`SELECT e.status, e.note, e.created_at, u.name AS actor_name, u.role AS actor_role
-    FROM order_events e LEFT JOIN users u ON u.id = e.actor_id WHERE e.order_id = ? ORDER BY e.id`).all(o.id);
+route('GET', '/api/orders/:id', { auth: true }, async (ctx) => {
+  const o = await loadOrderFor(ctx.user, Number(ctx.params.id));
+  const um = await usersById();
+  const history = (await T.events.where('order_id', '==', o.id)).sort((a, b) => a.id - b.id).map((e) => {
+    const u = e.actor_id ? um.get(e.actor_id) : null;
+    return { status: e.status, note: e.note, created_at: e.created_at, actor_name: u ? u.name : null, actor_role: u ? u.role : null };
+  });
   return [200, { order: { ...orderView(o, ctx.user), history } }];
 });
 
@@ -769,8 +821,8 @@ route('POST', '/api/orders/:id/status', { auth: true }, async (ctx) => {
   const a = ACTIONS[action];
   if (!a) fail(400, 'Ação inválida.');
   const reason = typeof ctx.body.reason === 'string' ? ctx.body.reason.trim() : '';
-  const id = tx(() => {
-    const o = loadOrderFor(ctx.user, Number(ctx.params.id));
+  const id = await tx(async () => {
+    const o = await loadOrderFor(ctx.user, Number(ctx.params.id));
     const isProvider = o.provider_id === ctx.user.id, isClient = o.client_id === ctx.user.id;
     // 1) quem pode fazer a ação
     if (a.who === 'prestador' && !isProvider) fail(403, 'Só o prestador deste pedido pode fazer isso.');
@@ -797,36 +849,37 @@ route('POST', '/api/orders/:id/status', { auth: true }, async (ctx) => {
       if (newStart < t) fail(400, 'O novo horário já passou. Escolha um atraso maior.', { minutes: 'O novo horário já passou.' });
       const limit = new Date(o.start_ts); limit.setHours(HARD_CLOSE_HOUR, 0, 0, 0);
       if (newEnd > limit.getTime()) fail(400, `Com esse atraso o serviço passaria das ${HARD_CLOSE_HOUR}:00. Combine outro dia com o cliente.`, { minutes: `Passaria das ${HARD_CLOSE_HOUR}:00.` });
-      db.prepare('UPDATE orders SET start_ts = ?, end_ts = ?, planned_end_ts = CASE WHEN planned_end_ts IS NULL THEN NULL ELSE planned_end_ts + ? END, delay_min = delay_min + ?, delay_reason = ?, updated_at = ? WHERE id = ?')
-        .run(newStart, newEnd, min * 60000, min, reason, t, o.id);
-      const moved = pushFollowing(o, newEnd);
-      addEvent(o.id, 'atrasado', ctx.user.id, `Novo horário ${fmtTime(newStart)}–${fmtTime(newEnd)} (+${min} min): ${reason}. O cliente pode cancelar sem custo${movedNote(moved)}`);
+      await T.orders.update(o.id, {
+        start_ts: newStart, end_ts: newEnd, planned_end_ts: o.planned_end_ts ? o.planned_end_ts + min * 60000 : null,
+        delay_min: (o.delay_min || 0) + min, delay_reason: reason, updated_at: t,
+      });
+      const moved = await pushFollowing(o, newEnd);
+      await addEvent(o.id, 'atrasado', ctx.user.id, `Novo horário ${fmtTime(newStart)}–${fmtTime(newEnd)} (+${min} min): ${reason}. O cliente pode cancelar sem custo${movedNote(moved)}`);
       return o.id;
     }
 
     if (action === 'iniciar') {
       if (o.started_ts) fail(409, 'Este atendimento já foi iniciado.');
-      const busy = db.prepare("SELECT id FROM orders WHERE provider_id = ? AND id != ? AND status = 'confirmado' AND started_ts IS NOT NULL").get(o.provider_id, o.id);
+      const busy = (await T.orders.where('provider_id', '==', o.provider_id)).some((r) => r.id !== o.id && r.status === 'confirmado' && r.started_ts);
       if (busy) fail(409, 'Você já tem um atendimento em andamento. Conclua ele antes de iniciar outro.');
+      const plannedMs = (o.planned_end_ts || o.end_ts) - o.start_ts;
       if (t < o.start_ts - START_EARLY_MS) {
         // ANTECIPADO: o atendimento passa a ser de agora até agora + duração normal
-        const plannedMs = (o.planned_end_ts || o.end_ts) - o.start_ts;
         const newStart = t, newEnd = t + plannedMs;
-        const clash = (col, uid) => db.prepare(`SELECT 1 FROM orders WHERE ${col} = ? AND id != ? AND status IN ('pendente','confirmado') AND start_ts < ? AND end_ts > ?`).get(uid, o.id, newEnd, newStart);
-        if (clash('provider_id', o.provider_id)) fail(409, 'Você tem outro pedido nesse intervalo. Não dá para antecipar este agora.');
-        if (clash('client_id', o.client_id)) fail(409, 'O cliente tem outro pedido nesse intervalo. Não dá para antecipar este agora.');
-        db.prepare('UPDATE orders SET started_ts = ?, start_ts = ?, end_ts = ?, planned_end_ts = ?, updated_at = ? WHERE id = ?').run(t, newStart, newEnd, newEnd, t, o.id);
+        const clash = async (col, uid) => (await T.orders.where(col, '==', uid)).some((r) => r.id !== o.id && isActive(r) && r.start_ts < newEnd && r.end_ts > newStart);
+        if (await clash('provider_id', o.provider_id)) fail(409, 'Você tem outro pedido nesse intervalo. Não dá para antecipar este agora.');
+        if (await clash('client_id', o.client_id)) fail(409, 'O cliente tem outro pedido nesse intervalo. Não dá para antecipar este agora.');
+        await T.orders.update(o.id, { started_ts: t, start_ts: newStart, end_ts: newEnd, planned_end_ts: newEnd, updated_at: t });
         const d = new Date(o.start_ts);
-        addEvent(o.id, 'iniciado', ctx.user.id, `Atendimento antecipado: estava marcado para ${pad(d.getDate())}/${pad(d.getMonth() + 1)} às ${fmtTime(o.start_ts)} e começou agora (previsão de término ${fmtTime(newEnd)}). O horário antigo ficou livre na agenda`);
+        await addEvent(o.id, 'iniciado', ctx.user.id, `Atendimento antecipado: estava marcado para ${pad(d.getDate())}/${pad(d.getMonth() + 1)} às ${fmtTime(o.start_ts)} e começou agora (previsão de término ${fmtTime(newEnd)}). O horário antigo ficou livre na agenda`);
         return o.id;
       }
       // Começou atrasado: o tempo do serviço conta a partir do início real, e quem vem depois é remarcado.
-      const plannedMs = (o.planned_end_ts || o.end_ts) - o.start_ts;
       const newEnd = Math.max(o.end_ts, t + plannedMs);
       const lateMin = Math.max(0, Math.round((t - o.start_ts) / 60000));
-      db.prepare('UPDATE orders SET started_ts = ?, planned_end_ts = COALESCE(planned_end_ts, end_ts), end_ts = ?, updated_at = ? WHERE id = ?').run(t, newEnd, t, o.id);
-      const moved = newEnd > o.end_ts ? pushFollowing(o, newEnd) : 0;
-      addEvent(o.id, 'iniciado', ctx.user.id, (lateMin >= 5 ? `Atendimento iniciado com ${lateMin} min de atraso` : 'Atendimento iniciado') + movedNote(moved));
+      await T.orders.update(o.id, { started_ts: t, planned_end_ts: o.planned_end_ts || o.end_ts, end_ts: newEnd, updated_at: t });
+      const moved = newEnd > o.end_ts ? await pushFollowing(o, newEnd) : 0;
+      await addEvent(o.id, 'iniciado', ctx.user.id, (lateMin >= 5 ? `Atendimento iniciado com ${lateMin} min de atraso` : 'Atendimento iniciado') + movedNote(moved));
       return o.id;
     }
 
@@ -838,9 +891,9 @@ route('POST', '/api/orders/:id/status', { auth: true }, async (ctx) => {
       const newEnd = o.end_ts + min * 60000;
       const limit = new Date(o.start_ts); limit.setHours(HARD_CLOSE_HOUR, 0, 0, 0);
       if (newEnd > limit.getTime()) fail(400, `Não dá para passar das ${HARD_CLOSE_HOUR}:00. Conclua e combine um retorno com o cliente.`, { minutes: `Passaria das ${HARD_CLOSE_HOUR}:00.` });
-      db.prepare('UPDATE orders SET planned_end_ts = COALESCE(planned_end_ts, end_ts), end_ts = ?, extended_min = extended_min + ?, updated_at = ? WHERE id = ?').run(newEnd, min, t, o.id);
-      const moved = pushFollowing(o, newEnd);
-      addEvent(o.id, 'prorrogado', ctx.user.id, `+${min} min (novo término ${fmtTime(newEnd)}): ${reason}${movedNote(moved)}`);
+      await T.orders.update(o.id, { planned_end_ts: o.planned_end_ts || o.end_ts, end_ts: newEnd, extended_min: (o.extended_min || 0) + min, updated_at: t });
+      const moved = await pushFollowing(o, newEnd);
+      await addEvent(o.id, 'prorrogado', ctx.user.id, `+${min} min (novo término ${fmtTime(newEnd)}): ${reason}${movedNote(moved)}`);
       return o.id;
     }
 
@@ -850,18 +903,15 @@ route('POST', '/api/orders/:id/status', { auth: true }, async (ctx) => {
       const freed = Math.floor((o.end_ts - t) / 60000);
       if (freed >= 5) note = `Concluído ${freed} min antes do previsto — horário liberado na agenda`;
     }
-    db.prepare('UPDATE orders SET status = ?, status_reason = ?, completed_ts = ?, updated_at = ? WHERE id = ?')
-      .run(a.to, reason || null, a.to === 'concluido' ? t : null, t, o.id);
-    addEvent(o.id, a.to, ctx.user.id, note);
+    const patch = { status: a.to, status_reason: reason || null, completed_ts: a.to === 'concluido' ? t : null, updated_at: t };
     // Pedido já pago foi cancelado: o dinheiro volta para o cliente (estorno no microsserviço de pagamentos)
-    if (a.to === 'cancelado' && o.payment_status === 'pago') {
-      db.prepare("UPDATE orders SET payment_status = 'estorno_pendente' WHERE id = ?").run(o.id);
-      estornoActor.set(o.id, ctx.user.id);
-    }
+    if (a.to === 'cancelado' && o.payment_status === 'pago') { patch.payment_status = 'estorno_pendente'; estornoActor.set(o.id, ctx.user.id); }
+    await T.orders.update(o.id, patch);
+    await addEvent(o.id, a.to, ctx.user.id, note);
     return o.id;
   });
   await processarEstornos();
-  return [200, { order: orderView(db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(id), ctx.user) }];
+  return [200, { order: orderView(await orderRow(id), ctx.user) }];
 });
 
 // =====================================================================
@@ -913,18 +963,17 @@ async function pag(method, pathname, body) {
   }
 }
 const brl = (v) => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
-const METODO_LABEL = { pix: 'Pix', cartao: 'cartão' };
 
 // Guarda no pedido o que o microsserviço respondeu. Se aprovou agora, entra no histórico
 // do pedido (e por tabela vira a notificação "Pagamento recebido" para o prestador).
-function aplicarCobranca(orderId, c, actorId) {
-  tx(() => {
-    const o = db.prepare('SELECT payment_status FROM orders WHERE id = ?').get(orderId);
+async function aplicarCobranca(orderId, c, actorId) {
+  await tx(async () => {
+    const o = await T.orders.get(orderId);
     const status = c.status === 'aprovado' ? 'pago' : c.status;
-    db.prepare('UPDATE orders SET payment_status = ?, payment_id = ?, payment_code = ?, updated_at = ? WHERE id = ?').run(status, c.id, c.codigo, now(), orderId);
+    await T.orders.update(orderId, { payment_status: status, payment_id: c.id, payment_code: c.codigo, updated_at: now() });
     if (status === 'pago' && o.payment_status !== 'pago') {
       const forma = c.metodo === 'cartao' ? `cartão ${c.cartao.bandeira} final ${c.cartao.final}${c.parcelas > 1 ? ` em ${c.parcelas}x` : ''}` : 'Pix';
-      addEvent(orderId, 'pago', actorId, `${brl(c.valor)} via ${forma} — comprovante ${c.codigo}`);
+      await addEvent(orderId, 'pago', actorId, `${brl(c.valor)} via ${forma} — comprovante ${c.codigo}`);
     }
   });
 }
@@ -932,25 +981,28 @@ function aplicarCobranca(orderId, c, actorId) {
 // Estornos pendentes (pedido pago que foi cancelado). Se o microsserviço estiver fora do ar,
 // tenta de novo depois — o pedido fica como "estorno_pendente" até dar certo.
 const estornoActor = new Map();
+let estornando = false;
 async function processarEstornos() {
-  const pend = db.prepare("SELECT id, payment_id, status_reason FROM orders WHERE payment_status = 'estorno_pendente' LIMIT 20").all();
-  for (const o of pend) {
-    let c;
-    try { c = (await chamarServico(pagUrl(), PAG_KEY, 'POST', `/cobrancas/${o.payment_id}/estornar`, { motivo: o.status_reason || 'Pedido cancelado' })).data.cobranca; }
-    catch (e) { return; } // fora do ar: tenta na próxima
-    if (!c) continue;
-    tx(() => {
-      db.prepare("UPDATE orders SET payment_status = 'estornado' WHERE id = ? AND payment_status = 'estorno_pendente'").run(o.id);
-      addEvent(o.id, 'estornado', estornoActor.get(o.id) ?? null, `${brl(c.valor)} devolvido ao cliente (${c.codigo})`);
-    });
-    estornoActor.delete(o.id);
-  }
+  if (estornando) return;
+  estornando = true;
+  try {
+    const pend = (await T.orders.where('payment_status', '==', 'estorno_pendente')).slice(0, 20);
+    for (const o of pend) {
+      let c;
+      try { c = (await chamarServico(pagUrl(), PAG_KEY, 'POST', `/cobrancas/${o.payment_id}/estornar`, { motivo: o.status_reason || 'Pedido cancelado' })).data.cobranca; }
+      catch (e) { return; } // fora do ar: tenta na próxima
+      if (!c) continue;
+      await T.orders.update(o.id, { payment_status: 'estornado' });
+      await addEvent(o.id, 'estornado', estornoActor.get(o.id) ?? null, `${brl(c.valor)} devolvido ao cliente (${c.codigo})`);
+      estornoActor.delete(o.id);
+    }
+  } finally { estornando = false; }
 }
 
 // O cliente paga o pedido: Pix (fica aguardando) ou cartão (aprova/recusa na hora).
 // Do cartão só chega o FINAL (4 dígitos), a bandeira e as parcelas — o número inteiro nunca sai do navegador.
 route('POST', '/api/orders/:id/pagamento', { auth: true, roles: ['cliente'] }, async (ctx) => {
-  const o = loadOrderFor(ctx.user, Number(ctx.params.id));
+  const o = await loadOrderFor(ctx.user, Number(ctx.params.id));
   if (o.client_id !== ctx.user.id) fail(403, 'Só o cliente do pedido pode pagar.');
   if (!PAYABLE.includes(o.status)) fail(409, 'Só dá para pagar depois que o prestador confirmar o pedido.');
   if (['pago', 'estorno_pendente', 'estornado'].includes(o.payment_status)) fail(409, 'Este pedido já foi pago.');
@@ -967,23 +1019,23 @@ route('POST', '/api/orders/:id/pagamento', { auth: true, roles: ['cliente'] }, a
     pagador_id: o.client_id, pagador_nome: o.client_name, recebedor_id: o.provider_id, recebedor_nome: o.provider_name,
     metodo, cartao: card,
   });
-  aplicarCobranca(o.id, cobranca, ctx.user.id);
-  return [201, { cobranca, order: orderView(db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(o.id), ctx.user) }];
+  await aplicarCobranca(o.id, cobranca, ctx.user.id);
+  return [201, { cobranca, order: orderView(await orderRow(o.id), ctx.user) }];
 });
 
 // "Simular pagamento" do Pix (na vida real quem avisa é o banco)
 route('POST', '/api/orders/:id/pagamento/confirmar', { auth: true, roles: ['cliente'] }, async (ctx) => {
-  const o = loadOrderFor(ctx.user, Number(ctx.params.id));
+  const o = await loadOrderFor(ctx.user, Number(ctx.params.id));
   if (o.client_id !== ctx.user.id) fail(403, 'Só o cliente do pedido pode pagar.');
   if (!o.payment_id) fail(404, 'Nenhum pagamento iniciado para este pedido.');
   const { cobranca } = await pag('POST', `/cobrancas/${o.payment_id}/confirmar`, {});
-  aplicarCobranca(o.id, cobranca, ctx.user.id);
-  return [200, { cobranca, order: orderView(db.prepare(`${ORDER_SELECT} WHERE o.id = ?`).get(o.id), ctx.user) }];
+  await aplicarCobranca(o.id, cobranca, ctx.user.id);
+  return [200, { cobranca, order: orderView(await orderRow(o.id), ctx.user) }];
 });
 
 // Comprovante / situação do pagamento de um pedido (cliente, prestador do pedido e admin)
 route('GET', '/api/orders/:id/pagamento', { auth: true }, async (ctx) => {
-  const o = loadOrderFor(ctx.user, Number(ctx.params.id));
+  const o = await loadOrderFor(ctx.user, Number(ctx.params.id));
   if (!o.payment_id) return [200, { cobranca: null }];
   const { cobranca } = await pag('GET', `/cobrancas/${o.payment_id}`);
   if (o.client_id !== ctx.user.id) cobranca.pix_copia_cola = null; // só quem paga vê o código Pix
@@ -1062,7 +1114,8 @@ const server = http.createServer(async (req, res) => {
       ctx.body = await readBody(req, matched.opts.bodyLimit);
       if (typeof ctx.body !== 'object' || ctx.body === null || Array.isArray(ctx.body)) fail(400, 'JSON inválido.');
     }
-    if (matched.opts.auth) authenticate(ctx);
+    await pronto; // dados de exemplo já gravados no Firestore
+    if (matched.opts.auth) await authenticate(ctx);
     if (matched.opts.roles && !matched.opts.roles.includes(ctx.user.role)) fail(403, 'Você não tem permissão para acessar este recurso.');
     const [status, data, extra] = await matched.handler(ctx); // algumas rotas (notificações) são assíncronas
     if (Buffer.isBuffer(data)) sendBinary(res, status, data, extra.contentType, ctx.headers);
@@ -1078,6 +1131,8 @@ const PORT = process.env.PORT || 3000;
 // Enquanto o servidor estiver no ar, a caixa de saída é entregue ao microsserviço a cada 2 s
 let estornoTimer = null;
 server.on('listening', () => {
+  console.log(`Banco: ${modoFirestore()}`);
+  pronto.then(() => notificador.preencherInicial()).catch((e) => console.error('[notificações]', e.message));
   notificador.iniciar();
   estornoTimer = setInterval(() => processarEstornos().catch(() => {}), 10000);
   estornoTimer.unref();

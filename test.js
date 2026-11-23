@@ -7,6 +7,7 @@ const assert = require('assert');
 // banco temporário, para não mexer no biko.db real
 const tmp = path.join(os.tmpdir(), `biko-test-${Date.now()}.db`);
 process.env.BIKO_DB = tmp;
+process.env.BIKO_FIRESTORE = 'memoria'; // Firestore em memória (não mexe no Firebase de verdade)
 // Microsserviço de notificações: começa "fora do ar" (porta fechada); mais abaixo ele é ligado
 process.env.NOTIF_URL = 'http://127.0.0.1:1';
 process.env.NOTIF_DB = path.join(os.tmpdir(), `biko-notif-test-${Date.now()}.db`);
@@ -233,7 +234,7 @@ async function t(name, fn) {
   // =====================================================================
   // 4. PERFIL DO USUÁRIO
   // =====================================================================
-  const { db: rawDb } = require('./db'); // mesmo banco temporário do servidor (para simular passagem de tempo)
+  const { T } = require('./db'); // mesmo banco (Firestore em memória) do servidor, para simular passagem de tempo
   const pad2 = (n) => String(n).padStart(2, '0');
   const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   const inDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
@@ -588,9 +589,9 @@ async function t(name, fn) {
   await t('status: cliente não cancela pedido confirmado a menos de 2h; prestador cancela com motivo', async () => {
     const maria = (await cliente('GET', '/api/auth/me')).data.user.id;
     const t0 = Date.now();
-    const ins = rawDb.prepare(`INSERT INTO orders (client_id, provider_id, service_id, service_title, category, price_cents, start_ts, end_ts, address, notes, status, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?, 'confirmado', ?, ?)`).run(maria, vaza.provider_id, vaza.id, 'Reparo (teste 2h)', 'Encanador', 12000, t0 + 90 * 60000, t0 + 150 * 60000, 'Rua X, 1', '', t0, t0);
-    const id = Number(ins.lastInsertRowid);
+    const id = await T.orders.insert({ client_id: maria, provider_id: vaza.provider_id, service_id: vaza.id, service_title: 'Reparo (teste 2h)', category: 'Encanador',
+      price_cents: 12000, start_ts: t0 + 90 * 60000, end_ts: t0 + 150 * 60000, address: 'Rua X, 1', notes: '', status: 'confirmado', status_reason: null,
+      completed_ts: null, started_ts: null, planned_end_ts: null, extended_min: 0, delay_min: 0, delay_reason: null, payment_status: null, payment_id: null, payment_code: null, created_at: t0, updated_at: t0 });
     const cc = await cliente('POST', `/api/orders/${id}/status`, { action: 'cancelar' });
     assert.strictEqual(cc.status, 400);
     assert.ok(/2 horas/.test(cc.data.error));
@@ -641,18 +642,19 @@ async function t(name, fn) {
 
   // ---------- AGENDA ELÁSTICA (imprevistos no atendimento) ----------
   const mariaId = (await cliente('GET', '/api/auth/me')).data.user.id;
-  const rawOrder = (o) => Number(rawDb.prepare(`INSERT INTO orders (client_id, provider_id, service_id, service_title, category, price_cents,
-      start_ts, end_ts, address, notes, status, started_ts, completed_ts, extended_min, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(o.client ?? mariaId, o.provider ?? vaza.provider_id, o.service ?? null, o.title ?? 'Limpeza de fogão', 'Limpeza', 9000,
-      o.start, o.end, 'Rua X, 1', '', o.status ?? 'confirmado', o.started ?? null, o.completed ?? null, o.extended ?? 0, Date.now(), Date.now()).lastInsertRowid);
+  const rawOrder = (o) => T.orders.insert({
+    client_id: o.client ?? mariaId, provider_id: o.provider ?? vaza.provider_id, service_id: o.service ?? null, service_title: o.title ?? 'Limpeza de fogão',
+    category: 'Limpeza', price_cents: 9000, start_ts: o.start, end_ts: o.end, address: 'Rua X, 1', notes: '', status: o.status ?? 'confirmado', status_reason: null,
+    started_ts: o.started ?? null, completed_ts: o.completed ?? null, extended_min: o.extended ?? 0, planned_end_ts: null, delay_min: 0, delay_reason: null,
+    payment_status: null, payment_id: null, payment_code: null, created_at: Date.now(), updated_at: Date.now() });
   const getO = async (id) => (await prest('GET', `/api/orders/${id}`)).data.order;
   const MIN = 60000;
 
   await t('elástica: iniciar (até 30 min antes ou antecipado); um atendimento por vez; concluir cedo libera o horário', async () => {
     const t0 = Date.now();
-    const far = rawOrder({ start: t0 + 3 * 3600e3, end: t0 + 3.5 * 3600e3 });
-    const near = rawOrder({ start: t0 + 20 * MIN, end: t0 + 50 * MIN });
-    const near2 = rawOrder({ start: t0 + 25 * MIN, end: t0 + 55 * MIN, client: cliente2.id });
+    const far = await rawOrder({ start: t0 + 3 * 3600e3, end: t0 + 3.5 * 3600e3 });
+    const near = await rawOrder({ start: t0 + 20 * MIN, end: t0 + 50 * MIN });
+    const near2 = await rawOrder({ start: t0 + 25 * MIN, end: t0 + 55 * MIN, client: cliente2.id });
     assert.ok((await getO(far)).actions.includes('iniciar')); // dá para antecipar
     assert.strictEqual((await cliente('POST', `/api/orders/${near}/status`, { action: 'iniciar' })).status, 403);
     assert.strictEqual((await prest('POST', `/api/orders/${near}/status`, { action: 'estender', minutes: 15, reason: 'teste' })).status, 400); // não iniciado
@@ -674,19 +676,20 @@ async function t(name, fn) {
 
   await t('elástica: antecipar — começa agora, libera o horário antigo, recusa se bater com outro pedido', async () => {
     const t0 = Date.now();
-    const early = rawOrder({ start: t0 + 2 * 3600e3, end: t0 + 2.5 * 3600e3 });
-    const blocker = rawOrder({ start: t0 + 10 * MIN, end: t0 + 40 * MIN, client: cliente2.id });
+    const early = await rawOrder({ start: t0 + 2 * 3600e3, end: t0 + 2.5 * 3600e3 });
+    const blocker = await rawOrder({ start: t0 + 10 * MIN, end: t0 + 40 * MIN, client: cliente2.id });
     const clash = await prest('POST', `/api/orders/${early}/status`, { action: 'iniciar' });
     assert.strictEqual(clash.status, 409);
     assert.ok(/outro pedido/.test(clash.data.error));
     await prest('POST', `/api/orders/${blocker}/status`, { action: 'cancelar', reason: 'liberar agenda' });
-    for (const o of rawDb.prepare("SELECT id FROM orders WHERE provider_id = ? AND status = 'confirmado' AND started_ts IS NULL AND start_ts < ? AND end_ts > ? AND id != ?").all(vaza.provider_id, Date.now() + 31 * MIN, Date.now() - MIN, early)) {
+    const agora = Date.now();
+    for (const o of (await T.orders.where('provider_id', '==', vaza.provider_id)).filter((x) => x.status === 'confirmado' && !x.started_ts && x.start_ts < agora + 31 * MIN && x.end_ts > agora - MIN && x.id !== early)) {
       await prest('POST', `/api/orders/${o.id}/status`, { action: 'cancelar', reason: 'liberar agenda' });
     }
     const r = await prest('POST', `/api/orders/${early}/status`, { action: 'iniciar' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.data));
     assert.strictEqual(r.data.order.in_progress, true);
-    assert.ok(Math.abs(rawDb.prepare('SELECT start_ts FROM orders WHERE id = ?').get(early).start_ts - Date.now()) < 5000);
+    assert.ok(Math.abs((await T.orders.get(early)).start_ts - Date.now()) < 5000);
     assert.strictEqual(r.data.order.duration_min, 30);
     const h = (await getO(early)).history;
     assert.ok(/antecipado/.test(h[h.length - 1].note));
@@ -695,10 +698,10 @@ async function t(name, fn) {
   await t('elástica: prorrogar (acabou a energia) remarca os seguintes em cascata e o intervalo livre absorve', async () => {
     const y = new Date(); y.setDate(y.getDate() - 1);
     const at = (h, m) => { const d = new Date(y); d.setHours(h, m, 0, 0); return d.getTime(); };
-    const A = rawOrder({ start: at(8, 0), end: at(8, 30), started: at(8, 0) });                         // fogão, 30 min, em andamento
-    const B = rawOrder({ start: at(8, 30), end: at(9, 30), client: cliente2.id });                        // colado no A
-    const C = rawOrder({ start: at(10, 0), end: at(11, 0), client: cliente2.id, status: 'pendente' });    // 30 min de folga antes
-    const D = rawOrder({ start: at(12, 0), end: at(13, 0) });                                             // longe: não mexe
+    const A = await rawOrder({ start: at(8, 0), end: at(8, 30), started: at(8, 0) });                         // fogão, 30 min, em andamento
+    const B = await rawOrder({ start: at(8, 30), end: at(9, 30), client: cliente2.id });                        // colado no A
+    const C = await rawOrder({ start: at(10, 0), end: at(11, 0), client: cliente2.id, status: 'pendente' });    // 30 min de folga antes
+    const D = await rawOrder({ start: at(12, 0), end: at(13, 0) });                                             // longe: não mexe
     const ext = (minutes, reason) => prest('POST', `/api/orders/${A}/status`, { action: 'estender', minutes, reason });
     assert.ok((await ext(15)).data.fields.reason);         // motivo obrigatório
     assert.ok((await ext(20, 'Acabou a energia')).data.fields.minutes); // só blocos de 15
@@ -736,10 +739,10 @@ async function t(name, fn) {
   await t('aviso de atraso: antes de iniciar, o prestador adia (11:00 -> 11:30), o cliente é avisado e pode cancelar', async () => {
     const tm = new Date(); tm.setDate(tm.getDate() + 1);
     const at = (h, m) => { const d = new Date(tm); d.setHours(h, m, 0, 0); return d.getTime(); };
-    const A = rawOrder({ start: at(11, 0), end: at(12, 0) });                                  // Maria, 11:00, confirmado
-    const B = rawOrder({ start: at(12, 0), end: at(13, 0), client: cliente2.id });             // colado: será remarcado
-    const C = rawOrder({ start: at(14, 0), end: at(15, 0), client: cliente2.id });             // longe: não mexe
-    const L = rawOrder({ start: at(19, 0), end: at(20, 0), client: cliente2.id, status: 'pendente' });
+    const A = await rawOrder({ start: at(11, 0), end: at(12, 0) });                                  // Maria, 11:00, confirmado
+    const B = await rawOrder({ start: at(12, 0), end: at(13, 0), client: cliente2.id });             // colado: será remarcado
+    const C = await rawOrder({ start: at(14, 0), end: at(15, 0), client: cliente2.id });             // longe: não mexe
+    const L = await rawOrder({ start: at(19, 0), end: at(20, 0), client: cliente2.id, status: 'pendente' });
     const delay = (id, minutes, reason, who = prest) => who('POST', `/api/orders/${id}/status`, { action: 'atrasar', minutes, reason });
 
     assert.ok((await getO(A)).actions.includes('atrasar'));
@@ -770,7 +773,7 @@ async function t(name, fn) {
     assert.ok((await delay(A, 45, 'mais')).data.fields.minutes);                          // passaria de 4 h
 
     // depois de iniciar não dá mais para avisar atraso (aí é "Preciso de mais tempo")
-    const N = rawOrder({ start: Date.now() + 10 * MIN, end: Date.now() + 40 * MIN });
+    const N = await rawOrder({ start: Date.now() + 10 * MIN, end: Date.now() + 40 * MIN });
     await prest('POST', `/api/orders/${N}/status`, { action: 'iniciar' });
     assert.ok(!(await getO(N)).actions.includes('atrasar'));
     assert.strictEqual((await delay(N, 15, 'Falta de luz')).status, 409);
@@ -785,7 +788,7 @@ async function t(name, fn) {
     const base = Date.now() - 10 * 24 * 3600e3;
     for (const [i, real, extra] of [[0, 30, 0], [1, 28, 0], [2, 45, 15]]) {
       const st = base + i * 24 * 3600e3;
-      rawOrder({ provider: prest2.id, service: s.id, start: st, end: st + 60 * MIN, started: st, completed: st + real * MIN, extended: extra, status: 'concluido' });
+      await rawOrder({ provider: prest2.id, service: s.id, start: st, end: st + 60 * MIN, started: st, completed: st + real * MIN, extended: extra, status: 'concluido' });
     }
     const r = await stats();
     assert.deepStrictEqual([r.count, r.median_min, r.avg_min, r.extended_count, r.suggested_min], [3, 30, 34, 1, 30]);
@@ -942,7 +945,7 @@ async function t(name, fn) {
     const r = await book(cliente, vaza, D(47), '08:00');
     assert.strictEqual(r.status, 201);
     oN = r.data.order;
-    assert.ok(notificador.pendentes() > 0);
+    assert.ok((await notificador.pendentes()) > 0);
   });
   const ms = require('./notificacoes/server');
   await new Promise((r) => ms.listen(0, '127.0.0.1', r));
@@ -950,8 +953,8 @@ async function t(name, fn) {
   const msUrl = process.env.NOTIF_URL;
   await t('notificações: quando o microsserviço volta, a fila é entregue sem perder nada', async () => {
     // forcar: os eventos que falharam estão esperando a próxima tentativa; aqui entregamos já
-    for (let i = 0; i < 10 && notificador.pendentes() > 0; i++) { await notificador.flush(true); await new Promise((r) => setImmediate(r)); }
-    assert.strictEqual(notificador.pendentes(), 0);
+    for (let i = 0; i < 10 && (await notificador.pendentes()) > 0; i++) { await notificador.flush(true); await new Promise((r) => setImmediate(r)); }
+    assert.strictEqual(await notificador.pendentes(), 0);
   });
   await t('notificações: prestador recebe "Novo pedido" (título = nome da ação, sem data)', async () => {
     const d = (await prest('GET', '/api/notificacoes')).data;

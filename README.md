@@ -15,19 +15,29 @@ O visual segue o protótipo (azul Biko, laranja de destaque, layout de celular).
 
 ## Como rodar
 
-Precisa do **Node.js 22.13 ou mais novo** (https://nodejs.org). Não tem `npm install`: o projeto não usa nenhuma biblioteca externa.
+Precisa do **Node.js 22.13 ou mais novo** (https://nodejs.org). O banco é o **Firebase (Cloud Firestore)**, então agora tem uma biblioteca: o `firebase-admin`.
 
 ```bash
+npm install           # só na primeira vez (instala o firebase-admin)
 npm run tudo          # sobe a API (3000), as notificações (3001) e os pagamentos (3002)
 ```
 
+**Ligar no Firebase (uma vez só):**
+
+1. No [console do Firebase](https://console.firebase.google.com), crie um projeto e ative o **Firestore Database** (modo de produção ou teste, tanto faz para a apresentação).
+2. ⚙️ Configurações do projeto → **Contas de serviço** → **Gerar nova chave privada**. Baixa um `.json`.
+3. Renomeie para `serviceAccountKey.json` e coloque na **raiz do projeto** (do lado do `server.js`). Ele já está no `.gitignore`: não suba para o GitHub.
+4. `npm run tudo`. No terminal aparece `Banco: Firebase (Cloud Firestore) — chave serviceAccountKey.json`. Na primeira vez a API grava sozinha os usuários, serviços e pedidos de exemplo.
+
+**Sem a chave**, o projeto roda igual, mas com um Firestore **em memória** (o terminal mostra `Banco: Firestore EM MEMÓRIA`): serve para testar, só que os dados somem ao desligar. Outra opção de chave: variável `FIREBASE_SERVICE_ACCOUNT=caminho/da/chave.json`.
+
 Ou em três terminais: `npm run notificacoes`, `npm run pagamentos` e `npm start`. A API funciona mesmo sem os microsserviços; só o sino ou o botão Pagar ficam fora do ar.
 
-Abra http://localhost:3000. O banco `biko.db` é criado sozinho na primeira vez, já com usuários, serviços e pedidos de exemplo.
+Abra http://localhost:3000.
 
-Para zerar tudo, pare o servidor e apague os arquivos `biko.db*`.
+Para zerar tudo no Firebase, apague as coleções no console do Firestore (users, services, orders, order_events, sessions, password_resets, user_photos, notification_outbox, notificacoes, cobrancas e _contadores). Na próxima vez que subir, os dados de exemplo voltam.
 
-Testes automatizados (120 da API + 10 de cada microsserviço; usam bancos temporários e não mexem no `biko.db`):
+Testes automatizados (121 da API + 10 de cada microsserviço; usam o Firestore em memória e não mexem no seu Firebase):
 
 ```bash
 npm test
@@ -57,7 +67,7 @@ Continuam como na entrega anterior:
 - **Editar dados**: nome, telefone e e-mail. Trocar o e-mail (que é o login) pede a **senha atual**. O perfil (admin/cliente/prestador) e o status não mudam por aqui, nem se alguém mandar `role` na requisição.
 - **Trocar senha**: pede a senha atual, a nova precisa seguir a regra (8+ caracteres, letras e números) e ser diferente da atual. Depois da troca as **outras sessões** (outros aparelhos) são encerradas e a atual continua. Tem limite de tentativas na senha atual (429).
 - **Foto**: o navegador recorta no centro e reduz para 256×256 antes de enviar. O servidor aceita PNG, JPG ou WEBP, confere os bytes do arquivo (não confia só no tipo declarado) e limita a 200 KB. A foto fica no banco e aparece no cabeçalho, nos resultados de busca e nos pedidos. Dá para trocar e remover.
-- **Persistência**: tudo é gravado no SQLite; ao sair e entrar de novo os dados e a foto continuam lá.
+- **Persistência**: tudo é gravado no Firebase (Cloud Firestore); ao sair e entrar de novo os dados e a foto continuam lá.
 
 ## 5 — Agendamento / pedidos
 
@@ -140,17 +150,20 @@ Detalhes e roteiro de apresentação: [`pagamentos/PASSO_A_PASSO.md`](pagamentos
 ```
 biko/
 ├── server.js        # servidor HTTP + rotas da API + regras de acesso e de negócio
-├── db.js            # SQLite (node:sqlite): tabelas, migração, hash de senha, dados de exemplo
-├── test.js          # testes automatizados do backend (120)
+├── firebase.js      # conexão com o Firebase (chave da conta de serviço) ou Firestore em memória
+├── firestore-memoria.js # Firestore em memória (testes e uso sem chave)
+├── store.js         # acesso às coleções do Firestore (ids numéricos, trava de concorrência)
+├── db.js            # coleções da API, hash de senha, dados de exemplo
+├── test.js          # testes automatizados do backend (121)
 ├── servicos.js      # chamada HTTP comum aos microsserviços
 ├── notificador.js   # ponte com o microsserviço: caixa de saída, reenvio e consulta
 ├── iniciar.js       # "npm run tudo": sobe os dois processos
-├── notificacoes/    # MICROSSERVIÇO de notificações (porta 3001, banco notificacoes.db)
+├── notificacoes/    # MICROSSERVIÇO de notificações (porta 3001, coleção notificacoes)
 │   ├── server.js
 │   ├── db.js
 │   ├── test.js
 │   └── PASSO_A_PASSO.md
-├── pagamentos/      # MICROSSERVIÇO de pagamentos SIMULADO (porta 3002, banco pagamentos.db)
+├── pagamentos/      # MICROSSERVIÇO de pagamentos SIMULADO (porta 3002, coleção cobrancas)
 │   ├── server.js
 │   ├── db.js
 │   ├── test.js
@@ -162,7 +175,7 @@ biko/
     └── app.js       # telas: login, cadastro, recuperação, início, busca, pedidos, serviços, conta, usuários
 ```
 
-Tabelas: `users`, `sessions`, `password_resets`, `user_photos`, `services`, `orders`, `order_events`, `notification_outbox`. Os microsserviços têm as suas: `notificacoes` e `cobrancas`.
+Coleções do Firestore: `users`, `sessions`, `password_resets`, `user_photos`, `services`, `orders`, `order_events`, `notification_outbox` (API) e `_contadores` (ids numéricos). Os microsserviços têm as suas: `notificacoes` e `cobrancas`.
 
 ## Rotas da API
 

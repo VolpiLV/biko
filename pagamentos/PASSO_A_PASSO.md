@@ -15,7 +15,7 @@ Era o item que faltava no Biko (pagamentos estava "fora do escopo"). Pagamento �
 ```
  Navegador / app              API principal (porta 3000)                   Microsserviço de pagamentos (porta 3002)
  ───────────────              ─────────────────────────                    ────────────────────────────────────────
-                              server.js ── biko.db                         pagamentos/server.js ── pagamentos.db
+                              server.js ── Firestore (orders...)           pagamentos/server.js ── Firestore (cobrancas)
  "Pagar R$ 120" ─ POST ─────► confere: é o cliente? pedido confirmado? ──► POST /cobrancas      (cria Pix ou cobra cartão)
  "Simular pagamento" ───────► ─────────────────────────────────────────► POST /cobrancas/:id/confirmar
                               grava "pago" no pedido + histórico
@@ -153,7 +153,6 @@ Ou em três terminais: `npm run notificacoes`, `npm run pagamentos` e `npm start
 |---|---|---|
 | PAG_PORT | 3002 | microsserviço |
 | PAG_HOST | 127.0.0.1 | microsserviço |
-| PAG_DB | pagamentos/pagamentos.db | microsserviço |
 | PAG_URL | http://127.0.0.1:3002 | API principal |
 | PAG_KEY | biko-dev-key | os dois (tem que ser igual) |
 

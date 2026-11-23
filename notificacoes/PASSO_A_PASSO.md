@@ -15,7 +15,7 @@ Notificação é a parte mais fácil de separar num microsserviço:
 ```
  Navegador / app                API principal (porta 3000)                 Microsserviço de notificações (porta 3001)
  ───────────────                ─────────────────────────                  ──────────────────────────────────────────
-                                server.js  ── biko.db                      notificacoes/server.js ── notificacoes.db
+                                server.js  ── Firestore (orders...)        notificacoes/server.js ── Firestore (notificacoes)
  sino 🔔  ── /api/notificacoes ──►  confere o login  ── X-Service-Key ──►  GET  /usuarios/:id/notificacoes
                                                                            POST /usuarios/:id/notificacoes/:n/lida
  ações no pedido ─ /api/orders ─►  grava o pedido + evento
@@ -33,7 +33,7 @@ Qualquer ação no pedido (criar, confirmar, recusar, cancelar, avisar atraso, i
 
 ### 2. O evento vai para a caixa de saída (outbox)
 
-Dentro dessa mesma função, `notificador.publicar()` grava o evento na tabela `notification_outbox` do `biko.db`, **na mesma transação** do pedido. Então:
+Dentro dessa mesma função, `notificador.publicar()` grava o evento na coleção `notification_outbox` do Firestore, logo depois de gravar o pedido. Então:
 
 - se o pedido não for gravado, a notificação também não existe;
 - a API **não chama a rede aqui**, então confirmar um pedido nunca fica lento nem dá erro por causa das notificações.
@@ -111,7 +111,7 @@ Todas pedem o cabeçalho `X-Service-Key` (menos `/saude`). Ele só escuta em `12
 
 ## Como rodar
 
-Precisa do Node.js 22.13 ou mais novo. Continua sem `npm install`.
+Precisa do Node.js 22.13 ou mais novo e de `npm install` (por causa do `firebase-admin`).
 
 **Jeito fácil (os dois de uma vez):**
 
@@ -143,7 +143,6 @@ Abra http://localhost:3000, entre como `prestador@biko.com / Prestador@123` e to
 |---|---|---|
 | NOTIF_PORT | 3001 | microsserviço |
 | NOTIF_HOST | 127.0.0.1 | microsserviço |
-| NOTIF_DB | notificacoes/notificacoes.db | microsserviço |
 | NOTIF_URL | http://127.0.0.1:3001 | API principal |
 | NOTIF_KEY | biko-dev-key | **os dois** (tem que ser igual). Em produção, troque por uma chave forte. |
 

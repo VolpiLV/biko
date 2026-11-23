@@ -1,7 +1,7 @@
 {
   "name": "biko",
-  "version": "1.3.0",
-  "description": "Biko - marketplace de serviços (atividade avaliativa)",
+  "version": "2.0.0",
+  "description": "Biko - marketplace de serviços (API + microsserviços, banco Firebase/Cloud Firestore)",
   "main": "server.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
@@ -12,5 +12,8 @@
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.10.0"
   }
 }

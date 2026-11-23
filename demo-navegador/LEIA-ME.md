@@ -2,6 +2,8 @@
 
 Gera uma página que roda o Biko inteiro **dentro do navegador**: a API principal, o microsserviço de notificações e o de pagamentos (o mesmo código do projeto, sem mudar nada), cada um com seu banco SQLite (via sql.js).
 
+> Atenção: este gerador foi feito antes da troca para o Firebase e usa a versão SQLite do backend. O link já publicado continua funcionando; para gerar de novo com o código atual, o shim precisaria simular o Firestore em vez do SQLite.
+
 ```bash
 node demo-navegador/build.js   # cria demo-navegador/saida/ (index.html, app.js, backend.js)
 ```

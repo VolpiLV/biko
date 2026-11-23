@@ -1,13 +1,14 @@
 // Biko - MICROSSERVIÇO DE NOTIFICAÇÕES (Node >= 22.13, sem bibliotecas externas)
 //
-// Processo separado da API principal, com banco próprio e porta própria (3001).
+// Processo separado da API principal, com banco próprio (coleção "notificacoes" no Firestore) e porta própria (3001).
 // - A API principal PUBLICA eventos de pedido (POST /eventos).
 // - Este serviço decide QUEM recebe e QUAL o texto, e guarda as notificações.
 // - A API principal consulta as notificações do usuário logado (GET /usuarios/:id/notificacoes).
 // Só a API principal fala com ele: toda chamada precisa da chave X-Service-Key.
 const http = require('http');
+const { modoFirestore } = require('../firebase');
 const crypto = require('crypto');
-const { db } = require('./db');
+const { N, exclusivo } = require('./db');
 
 const SERVICE_KEY = process.env.NOTIF_KEY || 'biko-dev-key';
 const now = () => Date.now();
@@ -64,7 +65,8 @@ function checkKey(req) {
   if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) fail(401, 'Chave de serviço inválida.');
 }
 const view = (n) => ({ id: n.id, acao: n.acao, titulo: n.titulo, mensagem: n.mensagem, pedido_id: n.pedido_id, lida: !!n.lida });
-const naoLidas = (uid) => db.prepare('SELECT COUNT(*) AS n FROM notificacoes WHERE usuario_id = ? AND lida = 0').get(uid).n;
+const doUsuario = (uid) => N.where('usuario_id', '==', uid);
+const naoLidas = async (uid) => (await N.where('usuario_id', '==', uid, 'lida', '==', 0)).length;
 
 // ---------- rotas ----------
 const routes = [];
@@ -78,45 +80,53 @@ function route(method, pattern, handler) {
 route('GET', '/saude', () => [200, { ok: true, servico: 'notificacoes' }]);
 
 // A API principal publica um evento de pedido. Resposta 200 = "recebi", mesmo que ninguém precise ser avisado.
-route('POST', '/eventos', (ctx) => {
+route('POST', '/eventos', async (ctx) => {
   const e = ctx.body;
   if (!Number.isInteger(e.evento_id) || e.evento_id < 1) fail(400, 'evento_id inválido.');
   if (!e.pedido || !Number.isInteger(e.pedido.id)) fail(400, 'pedido inválido.');
   const regra = ACOES[e.acao];
   if (!regra) return [200, { criadas: 0, ignorado: `ação "${e.acao}" não gera notificação` }];
-  const ins = db.prepare(`INSERT INTO notificacoes (evento_id, usuario_id, acao, titulo, mensagem, pedido_id, criada_em)
-    VALUES (?,?,?,?,?,?,?) ON CONFLICT(evento_id, usuario_id) DO NOTHING`);
   const texto = regra.texto(e).slice(0, 400);
-  let criadas = 0;
-  for (const uid of destinatarios(e, regra)) criadas += Number(ins.run(e.evento_id, uid, e.acao, regra.titulo, texto, e.pedido.id, now()).changes);
+  // uma por vez: o mesmo evento chegando 2 vezes (reenvio) não duplica a notificação
+  const criadas = await exclusivo(async () => {
+    let n = 0;
+    for (const uid of destinatarios(e, regra)) {
+      if (await N.first('evento_id', '==', e.evento_id, 'usuario_id', '==', uid)) continue;
+      await N.insert({ evento_id: e.evento_id, usuario_id: uid, acao: e.acao, titulo: regra.titulo, mensagem: texto, pedido_id: e.pedido.id, lida: 0, criada_em: now() });
+      n++;
+    }
+    return n;
+  });
   return [200, { criadas }];
 });
 
 // Lista as notificações de um usuário (mais novas primeiro). ?nao_lidas=1 filtra só as não lidas.
-route('GET', '/usuarios/:uid/notificacoes', (ctx) => {
+route('GET', '/usuarios/:uid/notificacoes', async (ctx) => {
   const uid = Number(ctx.params.uid);
   const limit = Math.min(Math.max(parseInt(ctx.query.limit, 10) || 20, 1), 50);
   const offset = Math.max(parseInt(ctx.query.offset, 10) || 0, 0);
-  const so = ctx.query.nao_lidas === '1' ? 'AND lida = 0' : '';
-  const total = db.prepare(`SELECT COUNT(*) AS n FROM notificacoes WHERE usuario_id = ? ${so}`).get(uid).n;
-  const rows = db.prepare(`SELECT * FROM notificacoes WHERE usuario_id = ? ${so} ORDER BY id DESC LIMIT ? OFFSET ?`).all(uid, limit, offset);
-  return [200, { notificacoes: rows.map(view), nao_lidas: naoLidas(uid), total, limit, offset, has_more: offset + limit < total }];
+  const todas = await doUsuario(uid);
+  const rows = (ctx.query.nao_lidas === '1' ? todas.filter((n) => !n.lida) : todas).sort((a, b) => b.id - a.id);
+  const total = rows.length;
+  return [200, { notificacoes: rows.slice(offset, offset + limit).map(view), nao_lidas: todas.filter((n) => !n.lida).length, total, limit, offset, has_more: offset + limit < total }];
 });
 
-route('GET', '/usuarios/:uid/notificacoes/contagem', (ctx) => [200, { nao_lidas: naoLidas(Number(ctx.params.uid)) }]);
+route('GET', '/usuarios/:uid/notificacoes/contagem', async (ctx) => [200, { nao_lidas: await naoLidas(Number(ctx.params.uid)) }]);
 
 // Marca UMA como lida. Só a dona da notificação consegue (de outro usuário dá 404).
-route('POST', '/usuarios/:uid/notificacoes/:id/lida', (ctx) => {
+route('POST', '/usuarios/:uid/notificacoes/:id/lida', async (ctx) => {
   const uid = Number(ctx.params.uid), id = Number(ctx.params.id);
-  const r = db.prepare('UPDATE notificacoes SET lida = 1 WHERE id = ? AND usuario_id = ?').run(id, uid);
-  if (!r.changes) fail(404, 'Notificação não encontrada.');
-  return [200, { ok: true, nao_lidas: naoLidas(uid) }];
+  const n = await N.get(id);
+  if (!n || n.usuario_id !== uid) fail(404, 'Notificação não encontrada.');
+  if (!n.lida) await N.update(id, { lida: 1 });
+  return [200, { ok: true, nao_lidas: await naoLidas(uid) }];
 });
 
-route('POST', '/usuarios/:uid/notificacoes/lidas', (ctx) => {
+route('POST', '/usuarios/:uid/notificacoes/lidas', async (ctx) => {
   const uid = Number(ctx.params.uid);
-  const r = db.prepare('UPDATE notificacoes SET lida = 1 WHERE usuario_id = ? AND lida = 0').run(uid);
-  return [200, { ok: true, marcadas: Number(r.changes), nao_lidas: 0 }];
+  const abertas = await N.where('usuario_id', '==', uid, 'lida', '==', 0);
+  await Promise.all(abertas.map((n) => N.update(n.id, { lida: 1 })));
+  return [200, { ok: true, marcadas: abertas.length, nao_lidas: 0 }];
 });
 
 // ---------- servidor ----------
@@ -136,7 +146,7 @@ const server = http.createServer(async (req, res) => {
       ctx.body = await readBody(req);
       if (typeof ctx.body !== 'object' || ctx.body === null || Array.isArray(ctx.body)) fail(400, 'JSON inválido.');
     }
-    const [status, data] = matched.handler(ctx);
+    const [status, data] = await matched.handler(ctx);
     send(res, status, data);
   } catch (err) {
     if (err instanceof HttpError) return send(res, err.status, { error: err.message });
@@ -148,7 +158,7 @@ const server = http.createServer(async (req, res) => {
 const PORT = Number(process.env.NOTIF_PORT || 3001);
 const HOST = process.env.NOTIF_HOST || '127.0.0.1'; // só aceita conexões da própria máquina
 if (require.main === module) {
-  server.listen(PORT, HOST, () => console.log(`Microsserviço de notificações em http://${HOST}:${PORT}`));
+  server.listen(PORT, HOST, () => console.log(`Banco: ${modoFirestore()}\n` +`Microsserviço de notificações em http://${HOST}:${PORT}`));
 }
 module.exports = server;
 module.exports.ACOES = ACOES;

@@ -6,8 +6,9 @@ const assert = require('assert');
 
 const tmp = path.join(os.tmpdir(), `pag-ms-test-${Date.now()}.db`);
 process.env.PAG_DB = tmp;
+process.env.BIKO_FIRESTORE = 'memoria';
 const server = require('./server');
-const { db } = require('./db');
+const { C } = require('./db');
 const KEY = { 'X-Service-Key': 'biko-dev-key' };
 
 let base, passed = 0;
@@ -58,7 +59,7 @@ const cob = (pedido, extra = {}) => ({ pedido_id: pedido, descricao: 'Reparo de 
   });
   await t('Pix vencido vira expirado e não confirma mais', async () => {
     const p = (await call('POST', '/cobrancas', cob(2))).data.cobranca;
-    db.prepare('UPDATE cobrancas SET expira_em = 1 WHERE id = ?').run(p.id);
+    await C.update(p.id, { expira_em: 1 });
     assert.strictEqual((await call('POST', `/cobrancas/${p.id}/confirmar`, {})).status, 409);
   });
   await t('cartão aprova na hora (só guarda o final); final 0002 recusa', async () => {

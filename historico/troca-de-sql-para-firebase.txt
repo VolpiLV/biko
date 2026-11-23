@@ -1,0 +1,117 @@
+HISTORICO DE PENSAMENTOS - TROCA DE SQL PARA FIREBASE
+=====================================================
+
+-------------------------------------------------------------------------
+O QUE FOI PEDIDO
+-------------------------------------------------------------------------
+
+  Trocar o banco do projeto (API + os dois microsservicos) de SQLite
+  (SQL) para o Firebase, e explicar se muda alguma coisa na hora de
+  rodar.
+
+-------------------------------------------------------------------------
+RESPOSTA CURTA: MUDA ALGUMA COISA PARA RODAR?
+-------------------------------------------------------------------------
+
+  Muda pouco. Agora tem DOIS passos a mais:
+
+    1. npm install            (antes nao tinha; agora instala o
+                               firebase-admin, a biblioteca do Firebase)
+    2. colocar a chave do Firebase na raiz do projeto com o nome
+       serviceAccountKey.json  (so uma vez)
+
+  Depois disso e o mesmo de sempre:
+
+    npm run tudo     -> API (3000) + notificacoes (3001) + pagamentos (3002)
+    npm test         -> testes (rodam sem Firebase, num banco em memoria)
+
+  SE NAO TIVER A CHAVE: o projeto roda do mesmo jeito, so que com um
+  Firestore em memoria (os dados somem ao desligar). O terminal avisa
+  qual banco esta usando:
+    "Banco: Firebase (Cloud Firestore) — chave serviceAccountKey.json"
+    ou
+    "Banco: Firestore EM MEMORIA (sem chave do Firebase...)"
+
+-------------------------------------------------------------------------
+COMO PEGAR A CHAVE DO FIREBASE (UMA VEZ SO)
+-------------------------------------------------------------------------
+
+  1. https://console.firebase.google.com -> Criar projeto (ex.: biko-tcc).
+  2. Menu "Firestore Database" -> Criar banco de dados (pode ser no
+     modo de teste, regiao southamerica-east1 / Sao Paulo).
+  3. Engrenagem (Configuracoes do projeto) -> aba "Contas de servico"
+     -> "Gerar nova chave privada". Baixa um arquivo .json.
+  4. Renomeie o arquivo para serviceAccountKey.json e coloque na pasta
+     do projeto, do lado do server.js.
+     IMPORTANTE: esse arquivo e a senha do banco. Ele ja esta no
+     .gitignore, nao suba para o GitHub.
+  5. npm run tudo. Na primeira vez a API grava sozinha os usuarios,
+     servicos e pedidos de exemplo. Da para ver tudo no console do
+     Firebase, em Firestore Database.
+
+-------------------------------------------------------------------------
+O QUE MUDOU NO PROJETO
+-------------------------------------------------------------------------
+
+  Arquivos novos
+  - firebase.js          conexao com o Firebase (acha a chave sozinho);
+                         sem chave, usa o Firestore em memoria
+  - firestore-memoria.js Firestore em memoria, com a mesma API (testes)
+  - store.js             acesso as colecoes: buscar, filtrar (where),
+                         inserir, atualizar, apagar; ids numericos
+                         (1, 2, 3...) com um contador por colecao; e uma
+                         trava para as regras que eram "transacao"
+
+  Arquivos reescritos
+  - db.js                nao cria mais tabelas; define as colecoes e
+                         grava os dados de exemplo no Firestore
+  - server.js            todas as consultas SQL viraram leituras do
+                         Firestore (os JOINs viraram buscas separadas
+                         e os COUNT/SUM viraram contas no JavaScript)
+  - notificador.js       caixa de saida (notification_outbox) no Firestore
+  - notificacoes/db.js e notificacoes/server.js  -> colecao "notificacoes"
+  - pagamentos/db.js e pagamentos/server.js      -> colecao "cobrancas"
+  - test.js e os testes dos microsservicos       -> usam o banco em memoria
+  - package.json         dependencia firebase-admin (versao 2.0.0)
+  - .gitignore           protege a chave serviceAccountKey.json
+  - README e PASSO_A_PASSO dos microsservicos atualizados
+
+  Cada TABELA virou uma COLECAO, e cada LINHA virou um DOCUMENTO:
+    users, sessions, password_resets, user_photos, services, orders,
+    order_events, notification_outbox  -> API principal
+    notificacoes                         -> microsservico de notificacoes
+    cobrancas                            -> microsservico de pagamentos
+    _contadores                          -> ultimo id de cada colecao
+
+  O que NAO mudou: rotas da API, regras de negocio, site, app Flutter,
+  respostas em JSON. Para quem usa o app, e tudo igual.
+
+-------------------------------------------------------------------------
+RACIOCINIO / DECISOES
+-------------------------------------------------------------------------
+
+  - Ids continuam numeros: o site e o app Flutter esperam numero
+    (pedido 12, usuario 3). O Firestore gera ids de texto, entao foi
+    criado um contador por colecao.
+  - Cada microsservico continua com o "seu" banco: no Firebase isso
+    virou colecoes separadas. Um nao le a colecao do outro.
+  - A regra "duas pessoas pedindo o mesmo horario ao mesmo tempo, so uma
+    passa" era uma transacao do SQLite. Agora e uma trava no servidor
+    (uma operacao de cada vez), que serve porque roda um servidor so.
+  - Firestore em memoria quando nao tem chave: os testes nao dependem de
+    internet nem do Firebase, e da para apresentar mesmo se a chave der
+    problema.
+  - Resultado: 121 testes da API + 10 de cada microsservico, todos ok.
+
+-------------------------------------------------------------------------
+SE DER ERRO
+-------------------------------------------------------------------------
+
+  - "Cannot find module 'firebase-admin'": faltou o npm install.
+  - Terminal mostra "Firestore EM MEMORIA" mas voce queria o Firebase:
+    o arquivo nao esta na raiz ou nao se chama serviceAccountKey.json.
+  - "[firestore] nao foi possivel preparar o banco" / erro NOT_FOUND ou
+    PERMISSION_DENIED: o Firestore Database nao foi criado no console
+    (passo 2) ou a chave e de outro projeto.
+  - O link de demonstracao no celular continua funcionando (ele usa a
+    versao anterior, que roda dentro do navegador).
