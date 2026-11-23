@@ -8,7 +8,7 @@ fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(OUT);
 
 // 1) backend: os módulos do projeto, sem mudar uma linha
-const mods = ['server.js', 'db.js', 'notificador.js', 'servicos.js',
+const mods = ['server.js', 'db.js', 'notificador.js', 'servicos.js', 'firebase.js', 'firestore-memoria.js', 'store.js',
   'notificacoes/server.js', 'notificacoes/db.js', 'pagamentos/server.js', 'pagamentos/db.js'];
 let bundle = '// Código do backend do Biko (copiado sem alterações) empacotado para rodar no navegador.\nwindow.__BikoModules = {\n';
 for (const m of mods) {
@@ -44,6 +44,7 @@ const html = `<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Biko — demonstração (TCC)</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>${css}${demoCss}</style>
 </head>
 <body>
@@ -64,14 +65,10 @@ const html = `<!DOCTYPE html>
     <label><input type="checkbox" id="dn3002"> Desligar microsserviço de pagamentos</label>
     <div class="row"><button type="button" id="demoReset">Recomeçar do zero</button><button type="button" id="demoClose">Fechar</button></div>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/sql.js@1.17.0/dist/sql-asm.js"></script>
   <script>
   (function () {
     function load(src) { return new Promise(function (ok, bad) { var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = bad; document.body.appendChild(s); }); }
-    initSqlJs().then(function (SQL) {
-      window.__BikoSQL = SQL;
-      return load('backend.js');
-    }).then(function () { return load('app.js'); }).then(function () {
+    load('backend.js').then(function () { return load('app.js'); }).then(function () {
       var panel = document.getElementById('demoPanel');
       document.getElementById('demoFab').onclick = function () { panel.hidden = !panel.hidden; };
       document.getElementById('demoClose').onclick = function () { panel.hidden = true; };
@@ -85,7 +82,7 @@ const html = `<!DOCTYPE html>
         b.onclick = async function () {
           var parts = b.dataset.login.split('|');
           try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
-          try { var r = await api('POST', '/api/auth/login', { email: parts[0], password: parts[1] }); panel.hidden = true; enterApp(r.user); }
+          try { var r = await api('POST', '/api/auth/login', { email: parts[0], password: parts[1] }); panel.hidden = true; state.loginMode = r.user.role === 'prestador' ? 'prestador' : 'cliente'; enterApp(r.user); }
           catch (e) { toast(e.message, true); }
         };
       });

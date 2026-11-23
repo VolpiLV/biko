@@ -15,6 +15,11 @@ const T = {
   orders: colecao('orders'),
   events: colecao('order_events'),
   outbox: colecao('notification_outbox'),
+  // telas novas (Figma)
+  messages: colecao('messages'),        // conversas entre cliente e prestador
+  reviews: colecao('reviews'),          // avaliação do cliente depois do serviço concluído
+  portfolio: colecao('portfolio'),      // fotos de trabalhos do prestador
+  withdrawals: colecao('withdrawals'),  // saques da carteira do prestador (simulados)
 };
 
 // ---- hash de senha (scrypt + salt aleatório) ----
@@ -68,6 +73,9 @@ async function seed() {
     payment_status: null, payment_id: null, payment_code: null, ...o,
   });
   const event = (order_id, status, actor_id, note, created_at) => T.events.insert({ order_id, status, actor_id, note, created_at });
+  // Perfil profissional dos prestadores de exemplo (CPFs de teste válidos)
+  await T.users.update(carlos.id, { specialty: 'Encanador e eletricista', visit_price_cents: 12000, cpf: '52998224725', birth_date: '1990-03-12', online: 1, categories: ['Encanador', 'Eletricista'] });
+  await T.users.update(joana.id, { specialty: 'Telhados, pintura e limpeza', visit_price_cents: 18000, cpf: '11144477735', birth_date: '1988-07-02', online: 1, categories: ['Telhado & Reparador', 'Pintor', 'Limpeza'] });
   const t0 = at(-3, 9, 0);
   const past = await order({ start_ts: at(-1, 10, 0), end_ts: at(-1, 11, 0), notes: 'Vazamento na pia da cozinha.', status: 'confirmado', created_at: t0, updated_at: t0 + 3600e3 });
   await event(past, 'pendente', maria.id, 'Pedido criado', t0);
@@ -75,6 +83,20 @@ async function seed() {
   const t1 = Date.now();
   const next = await order({ start_ts: at(3, 14, 0), end_ts: at(3, 15, 0), notes: 'Descarga do banheiro não para de pingar.', status: 'pendente', created_at: t1, updated_at: t1 });
   await event(next, 'pendente', maria.id, 'Pedido criado', t1);
+
+  // Um serviço antigo já concluído e avaliado (para a nota aparecer na busca)
+  const t2 = at(-10, 9, 0);
+  const done = await order({ start_ts: at(-8, 9, 0), end_ts: at(-8, 10, 0), notes: 'Torneira da cozinha pingando.', status: 'concluido', started_ts: at(-8, 9, 5), completed_ts: at(-8, 9, 50), created_at: t2, updated_at: at(-8, 9, 50) });
+  await event(done, 'pendente', maria.id, 'Pedido criado', t2);
+  await event(done, 'confirmado', carlos.id, null, t2 + 3600e3);
+  await event(done, 'iniciado', carlos.id, 'Atendimento iniciado', at(-8, 9, 5));
+  await event(done, 'concluido', carlos.id, null, at(-8, 9, 50));
+  await T.reviews.insert({ order_id: done, provider_id: carlos.id, client_id: maria.id, stars: 5, comment: 'Chegou no horário e resolveu rápido.', created_at: at(-8, 12, 0) });
+
+  // Uma conversa de exemplo entre a Maria e o Carlos
+  const msg = (sender, text, ts) => T.messages.insert({ client_id: maria.id, provider_id: carlos.id, sender_id: sender, text, read: 1, created_at: ts });
+  await msg(maria.id, 'Oi Carlos! A descarga do banheiro não para de pingar. Consegue olhar?', t1 - 600e3);
+  await msg(carlos.id, 'Consigo sim! Já deixei agendado. Se puder, me mande uma foto antes.', t1 - 300e3);
 }
 
 const pronto = seed();

@@ -63,6 +63,9 @@ function criar() {
       return fn(tx);
     },
     settings() {},
+    // Usados pela demonstração no navegador para guardar/restaurar os dados (não existem no Firebase real)
+    _dump() { const out = {}; for (const [c, m] of data) out[c] = Object.fromEntries(m); return out; },
+    _load(obj) { data.clear(); for (const [c, docs] of Object.entries(obj || {})) data.set(c, new Map(Object.entries(docs))); },
   };
   return db;
 }

@@ -77,7 +77,11 @@ function readBody(req, limit = 100 * 1024) {
 }
 
 const photoUrl = (id, v) => (v > 0 ? `/api/photo/${id}?v=${v}` : null);
-const publicUser = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role, active: !!u.active, created_at: u.created_at, photo_url: photoUrl(u.id, u.photo_v) });
+const publicUser = (u) => ({
+  id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role, active: !!u.active, created_at: u.created_at, photo_url: photoUrl(u.id, u.photo_v),
+  // perfil profissional (só prestador)
+  ...(u.role === 'prestador' ? { specialty: u.specialty || null, visit_price: u.visit_price_cents ? u.visit_price_cents / 100 : null, online: u.online !== 0, categories: u.categories || null, verified: !!u.cpf } : {}),
+});
 
 function validatePassword(pw) {
   if (typeof pw !== 'string' || pw.length < 8) return 'A senha deve ter no mínimo 8 caracteres.';
@@ -165,14 +169,32 @@ async function authenticate(ctx) {
 // ---------- leituras com "join" (no Firestore os dados relacionados são buscados à parte) ----------
 const usersById = async () => new Map((await T.users.all()).map((u) => [u.id, u]));
 // Serviço + dados do prestador (era o SELECT ... JOIN users)
-function withProvider(s, um) {
+function withProvider(s, um, rm) {
   const u = um.get(s.provider_id) || {};
-  return { ...s, provider_name: u.name, provider_photo_v: u.photo_v || 0, u_active: u.active, u_role: u.role };
+  const r = rm ? rm.get(s.provider_id) : null;
+  return {
+    ...s, provider_name: u.name, provider_photo_v: u.photo_v || 0, u_active: u.active, u_role: u.role,
+    provider_specialty: u.specialty || null, provider_verified: !!u.cpf, provider_online: u.online !== 0,
+    provider_categories: u.categories || null, provider_rating: r ? r.avg : null, provider_reviews: r ? r.count : 0,
+  };
+}
+// Média das avaliações de cada prestador: Map(id -> { avg, count })
+async function ratingsByProvider() {
+  const m = new Map();
+  for (const r of await T.reviews.all()) {
+    const a = m.get(r.provider_id) || { sum: 0, count: 0 };
+    a.sum += r.stars; a.count++; m.set(r.provider_id, a);
+  }
+  for (const a of m.values()) a.avg = Math.round((a.sum / a.count) * 10) / 10;
+  return m;
 }
 // Serviços que aparecem para o cliente: ativos e de prestador ativo
+// Categoria desligada no perfil profissional também some da busca.
 async function publicServices() {
   const um = await usersById();
-  return (await T.services.where('active', '==', 1)).map((s) => withProvider(s, um)).filter((s) => s.u_active && s.u_role === 'prestador');
+  const rm = await ratingsByProvider();
+  return (await T.services.where('active', '==', 1)).map((s) => withProvider(s, um, rm))
+    .filter((s) => s.u_active && s.u_role === 'prestador' && s.provider_online && (!s.provider_categories || s.provider_categories.includes(s.category)));
 }
 // Pedido + nome/telefone/foto do cliente e do prestador (era o ORDER_SELECT com JOIN)
 function withPeople(o, um) {
@@ -210,13 +232,24 @@ route('POST', '/api/auth/register', {}, async (ctx) => {
   const errors = validateProfile({ name, email, phone });
   const pwErr = validatePassword(password);
   if (pwErr) errors.password = pwErr;
-  if (Object.keys(errors).length) fail(400, 'Dados inválidos.', errors);
   // Auto-cadastro só permite cliente ou prestador; admin nunca é criado por aqui.
   const finalRole = role === 'prestador' ? 'prestador' : 'cliente';
+  // Verificação do profissional: CPF válido e maior de 18 anos
+  let cpf = null, birth = null;
+  if (finalRole === 'prestador') {
+    cpf = String(ctx.body.cpf || '').replace(/\D/g, '');
+    if (!cpfValido(cpf)) errors.cpf = 'CPF inválido. Confira os números.';
+    birth = String(ctx.body.birth_date || '');
+    const age = idade(birth);
+    if (age === null) errors.birth_date = 'Informe a data de nascimento (DD/MM/AAAA).';
+    else if (age < 18) errors.birth_date = 'Apenas maiores de 18 anos podem prestar serviços no Biko.';
+    if (!ctx.body.terms) errors.terms = 'Aceite os Termos do Prestador para continuar.';
+  }
+  if (Object.keys(errors).length) fail(400, 'Dados inválidos.', errors);
   const mail = email.trim().toLowerCase();
   const id = await tx(async () => {
     if (await emailTaken(mail)) fail(409, 'Este e-mail já está cadastrado.', { email: 'E-mail já cadastrado.' });
-    return T.users.insert(newUser(name.trim(), mail, phone, password, finalRole));
+    return T.users.insert({ ...newUser(name.trim(), mail, phone, password, finalRole), ...(cpf ? { cpf, birth_date: birth, online: 1 } : {}) });
   });
   const session = await startSession(ctx, id);
   return [201, { user: publicUser(await T.users.get(id)), ...session }];
@@ -228,7 +261,10 @@ route('POST', '/api/auth/login', {}, async (ctx) => {
   const mail = String(email).trim().toLowerCase();
   const key = `${mail}|${ctx.req.socket.remoteAddress}`;
   if (tooManyAttempts(key)) fail(429, 'Muitas tentativas. Aguarde alguns minutos e tente novamente.');
-  const user = await T.users.first('email', '==', mail);
+  // Entra com e-mail ou telefone (só os números do telefone são comparados)
+  const digits = mail.replace(/\D/g, '');
+  const user = mail.includes('@') ? await T.users.first('email', '==', mail)
+    : digits.length >= 10 ? (await T.users.all()).find((u) => String(u.phone || '').replace(/\D/g, '').endsWith(digits.slice(-11))) : undefined;
   if (!user || !verifyPassword(String(password), user.password_hash)) {
     registerFailure(key);
     fail(401, 'E-mail ou senha inválidos.'); // mensagem genérica de propósito
@@ -290,9 +326,16 @@ route('GET', '/api/prestador/painel', { auth: true, roles: ['prestador', 'admin'
   const mine = await T.orders.where('provider_id', '==', id);
   const novos = mine.filter((o) => o.status === 'pendente').length;
   const ganhos = mine.filter((o) => o.status === 'concluido' && o.completed_ts >= monthStart).reduce((s, o) => s + o.price_cents, 0);
+  const wk = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)).getTime(); // segunda-feira
+  const feitosSemana = mine.filter((o) => o.status === 'concluido' && o.completed_ts >= wk);
   const um = await usersById();
   const proximos = mine.filter((o) => o.status === 'confirmado').sort((a, b) => a.start_ts - b.start_ts).slice(0, 3).map((o) => orderView(withPeople(o, um), ctx.user));
-  return [200, { resumo: { pedidosNovos: novos, avaliacao: null, ganhosMes: ganhos / 100 }, proximos, mensagem: 'Aqui o prestador acompanha pedidos e ganhos.' }];
+  const pendentes = mine.filter((o) => o.status === 'pendente').sort((a, b) => a.start_ts - b.start_ts).map((o) => orderView(withPeople(o, um), ctx.user));
+  const r = (await ratingsByProvider()).get(id);
+  return [200, {
+    resumo: { pedidosNovos: novos, avaliacao: r ? r.avg : null, avaliacoes: r ? r.count : 0, ganhosMes: ganhos / 100, ganhosSemana: feitosSemana.reduce((s, o) => s + o.price_cents, 0) / 100, servicosSemana: feitosSemana.length },
+    proximos, pendentes, mensagem: 'Aqui o prestador acompanha pedidos e ganhos.',
+  }];
 });
 
 // ----- GESTÃO DE USUÁRIOS (somente admin) -----
@@ -461,6 +504,8 @@ const serviceView = (r) => ({
   id: r.id, provider_id: r.provider_id, provider_name: r.provider_name, provider_photo_url: photoUrl(r.provider_id, r.provider_photo_v),
   title: r.title, category: r.category, description: r.description,
   price: r.price_cents / 100, duration_min: r.duration_min, active: !!r.active,
+  provider_specialty: r.provider_specialty || null, provider_verified: !!r.provider_verified, provider_online: r.provider_online !== false,
+  provider_rating: r.provider_rating ?? null, provider_reviews: r.provider_reviews || 0,
 });
 async function serviceRow(id) {
   const s = await T.services.get(id);
@@ -530,7 +575,7 @@ route('PATCH', '/api/services/:id', { auth: true, roles: ['prestador'] }, async 
 // 6. BUSCA (sobre os serviços reais cadastrados, sem acento e sem diferenciar maiúscula)
 // =====================================================================
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
-const SORTS = ['relevancia', 'preco_asc', 'preco_desc', 'nome'];
+const SORTS = ['relevancia', 'preco_asc', 'preco_desc', 'nome', 'nota'];
 
 route('GET', '/api/search', { auth: true }, async (ctx) => {
   const { q = '', category = '', max_price = '', sort = '' } = ctx.query;
@@ -567,7 +612,8 @@ route('GET', '/api/search', { auth: true }, async (ctx) => {
   const order = sort || (terms.length ? 'relevancia' : 'nome');
   rows.sort(order === 'preco_asc' ? (a, b) => a.r.price_cents - b.r.price_cents || cmpName(a, b)
     : order === 'preco_desc' ? (a, b) => b.r.price_cents - a.r.price_cents || cmpName(a, b)
-    : order === 'relevancia' ? (a, b) => b.score - a.score || cmpName(a, b)
+    : order === 'relevancia' ? (a, b) => b.score - a.score || (b.r.provider_rating || 0) - (a.r.provider_rating || 0) || cmpName(a, b)
+    : order === 'nota' ? (a, b) => (b.r.provider_rating || 0) - (a.r.provider_rating || 0) || b.r.provider_reviews - a.r.provider_reviews || cmpName(a, b)
     : cmpName);
 
   return [200, { total: rows.length, limit, offset, results: rows.slice(offset, offset + limit).map((x) => serviceView(x.r)) }];
@@ -588,7 +634,8 @@ route('GET', '/api/providers/:id/agenda', { auth: true }, async (ctx) => {
 // 5. AGENDAMENTO / PEDIDOS (regras de negócio)
 // =====================================================================
 const ACTIVE = ['pendente', 'confirmado'];
-const PAYABLE = ['confirmado', 'concluido'];     // o cliente paga depois que o prestador confirma
+const PAYABLE = ['pendente', 'confirmado', 'concluido']; // o cliente já paga ao agendar (se o prestador recusar, o valor é estornado)
+const PROTECAO_CENTS = 500;                      // Taxa de Proteção Biko cobrada do cliente (R$ 5,00)
 const STATUSES = ['pendente', 'confirmado', 'recusado', 'concluido', 'cancelado'];
 const OPEN_HOUR = 7, CLOSE_HOUR = 20;           // atendimento das 07:00 às 20:00
 const MIN_LEAD_MS = 60 * 60 * 1000;             // agendar com pelo menos 1 h de antecedência
@@ -686,6 +733,7 @@ function orderView(o, user) {
     // pagamento (simulado, microsserviço pagamentos/)
     payment: o.payment_status ? { status: o.payment_status, code: o.payment_code } : null,
     can_pay: o.client_id === user.id && PAYABLE.includes(o.status) && !['pago', 'estorno_pendente', 'estornado'].includes(o.payment_status),
+    protection_fee: PROTECAO_CENTS / 100, total: (o.price_cents + PROTECAO_CENTS) / 100,
   };
 }
 
@@ -813,7 +861,9 @@ route('GET', '/api/orders/:id', { auth: true }, async (ctx) => {
     const u = e.actor_id ? um.get(e.actor_id) : null;
     return { status: e.status, note: e.note, created_at: e.created_at, actor_name: u ? u.name : null, actor_role: u ? u.role : null };
   });
-  return [200, { order: { ...orderView(o, ctx.user), history } }];
+  const rv = await T.reviews.first('order_id', '==', o.id);
+  const review = rv ? { stars: rv.stars, comment: rv.comment } : null;
+  return [200, { order: { ...orderView(o, ctx.user), history, review, can_review: !rv && o.status === 'concluido' && o.client_id === ctx.user.id, client_since: (um.get(o.client_id) || {}).created_at || null } }];
 });
 
 route('POST', '/api/orders/:id/status', { auth: true }, async (ctx) => {
@@ -905,7 +955,7 @@ route('POST', '/api/orders/:id/status', { auth: true }, async (ctx) => {
     }
     const patch = { status: a.to, status_reason: reason || null, completed_ts: a.to === 'concluido' ? t : null, updated_at: t };
     // Pedido já pago foi cancelado: o dinheiro volta para o cliente (estorno no microsserviço de pagamentos)
-    if (a.to === 'cancelado' && o.payment_status === 'pago') { patch.payment_status = 'estorno_pendente'; estornoActor.set(o.id, ctx.user.id); }
+    if ((a.to === 'cancelado' || a.to === 'recusado') && o.payment_status === 'pago') { patch.payment_status = 'estorno_pendente'; estornoActor.set(o.id, ctx.user.id); }
     await T.orders.update(o.id, patch);
     await addEvent(o.id, a.to, ctx.user.id, note);
     return o.id;
@@ -1015,7 +1065,7 @@ route('POST', '/api/orders/:id/pagamento', { auth: true, roles: ['cliente'] }, a
     card = { final: String(c.final), bandeira: c.bandeira, parcelas: Number(c.parcelas || 1) };
   }
   const { cobranca } = await pag('POST', '/cobrancas', {
-    pedido_id: o.id, descricao: o.service_title, valor_centavos: o.price_cents,
+    pedido_id: o.id, descricao: o.service_title, valor_centavos: o.price_cents + PROTECAO_CENTS, taxa_protecao_centavos: PROTECAO_CENTS,
     pagador_id: o.client_id, pagador_nome: o.client_name, recebedor_id: o.provider_id, recebedor_nome: o.provider_name,
     metodo, cartao: card,
   });
@@ -1053,6 +1103,214 @@ route('GET', '/api/pagamentos', { auth: true }, async (ctx) => {
   const d = await pag('GET', `/cobrancas?${qs}`);
   if (ctx.user.role !== 'cliente') d.cobrancas.forEach((c) => (c.pix_copia_cola = null));
   return [200, d];
+});
+
+// =====================================================================
+// TELAS NOVAS DO FIGMA: conversas, avaliações, perfil profissional, portfólio e carteira
+// =====================================================================
+
+// ----- Verificação do profissional -----
+// CPF: confere os dois dígitos verificadores (o mesmo cálculo da Receita)
+function cpfValido(cpf) {
+  if (!/^\d{11}$/.test(cpf) || /^(\d)\1{10}$/.test(cpf)) return false;
+  const dig = (n) => {
+    let s = 0;
+    for (let i = 0; i < n; i++) s += Number(cpf[i]) * (n + 1 - i);
+    const r = (s * 10) % 11;
+    return r === 10 ? 0 : r;
+  };
+  return dig(9) === Number(cpf[9]) && dig(10) === Number(cpf[10]);
+}
+// "AAAA-MM-DD" ou "DD/MM/AAAA" -> idade em anos (null se a data não existe ou está no futuro)
+function idade(str) {
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str), y, mo, d;
+  if (m) [y, mo, d] = [m[1], m[2], m[3]].map(Number);
+  else if ((m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(str))) [d, mo, y] = [m[1], m[2], m[3]].map(Number);
+  else return null;
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d || dt > new Date() || y < 1900) return null;
+  const t = new Date();
+  let a = t.getFullYear() - y;
+  if (t.getMonth() < mo - 1 || (t.getMonth() === mo - 1 && t.getDate() < d)) a--;
+  return a;
+}
+route('POST', '/api/auth/verificar-profissional', {}, (ctx) => {
+  // usado pela tela "Verificação do Profissional" para mostrar a idade antes de enviar
+  const cpf = String(ctx.body.cpf || '').replace(/\D/g, '');
+  const age = idade(String(ctx.body.birth_date || ''));
+  return [200, { cpf_ok: cpfValido(cpf), idade: age, maior: age !== null && age >= 18 }];
+});
+
+// ----- Conversas (chat entre cliente e prestador) -----
+const otherView = (u) => ({ id: u.id, name: u.name, role: u.role, photo_url: photoUrl(u.id, u.photo_v), specialty: u.specialty || null, online: u.role === 'prestador' ? u.online !== 0 : true });
+// Uma conversa é sempre entre um cliente e um prestador (o admin só observa pelos pedidos)
+async function parConversa(me, otherId) {
+  if (me.role === 'admin') fail(403, 'O admin não participa das conversas.');
+  const other = Number.isInteger(otherId) ? await T.users.get(otherId) : undefined;
+  if (!other || !other.active || other.id === me.id) fail(404, 'Pessoa não encontrada.');
+  const okPair = (me.role === 'cliente' && other.role === 'prestador') || (me.role === 'prestador' && other.role === 'cliente');
+  if (!okPair) fail(400, 'A conversa é entre cliente e prestador.');
+  return { other, client_id: me.role === 'cliente' ? me.id : other.id, provider_id: me.role === 'prestador' ? me.id : other.id };
+}
+const meuLado = (me) => (me.role === 'cliente' ? 'client_id' : 'provider_id');
+
+route('GET', '/api/conversas', { auth: true, roles: ['cliente', 'prestador'] }, async (ctx) => {
+  const me = ctx.user;
+  const msgs = (await T.messages.where(meuLado(me), '==', me.id)).sort((a, b) => a.id - b.id);
+  const byOther = new Map();
+  for (const m of msgs) {
+    const oid = me.role === 'cliente' ? m.provider_id : m.client_id;
+    const c = byOther.get(oid) || { unread: 0 };
+    c.last = m;
+    if (m.sender_id !== me.id && !m.read) c.unread++;
+    byOther.set(oid, c);
+  }
+  const um = await usersById();
+  const list = [...byOther.entries()].filter(([oid]) => um.get(oid)).map(([oid, c]) => ({
+    user: otherView(um.get(oid)), unread: c.unread,
+    last: { text: c.last.text, mine: c.last.sender_id === me.id, created_at: c.last.created_at },
+  })).sort((a, b) => b.last.created_at - a.last.created_at);
+  return [200, { conversas: list, nao_lidas: list.reduce((s, c) => s + c.unread, 0) }];
+});
+
+route('GET', '/api/conversas/:id', { auth: true, roles: ['cliente', 'prestador'] }, async (ctx) => {
+  const p = await parConversa(ctx.user, Number(ctx.params.id));
+  const msgs = (await T.messages.where('client_id', '==', p.client_id, 'provider_id', '==', p.provider_id)).sort((a, b) => a.id - b.id);
+  for (const m of msgs) if (m.sender_id !== ctx.user.id && !m.read) await T.messages.update(m.id, { read: 1 }); // abriu = leu
+  // próximo pedido ativo entre os dois (para o atalho de agenda e o telefone depois de confirmado)
+  const prox = (await T.orders.where('client_id', '==', p.client_id)).filter((o) => o.provider_id === p.provider_id && isActive(o)).sort((a, b) => a.start_ts - b.start_ts)[0];
+  const phone = prox && prox.status === 'confirmado' ? p.other.phone : null;
+  return [200, {
+    other: { ...otherView(p.other), phone },
+    next_order: prox ? { id: prox.id, date: fmtDate(prox.start_ts), time: fmtTime(prox.start_ts), status: prox.status, title: prox.service_title } : null,
+    messages: msgs.slice(-200).map((m) => ({ id: m.id, text: m.text, mine: m.sender_id === ctx.user.id, created_at: m.created_at })),
+  }];
+});
+
+route('POST', '/api/conversas/:id', { auth: true, roles: ['cliente', 'prestador'] }, async (ctx) => {
+  const p = await parConversa(ctx.user, Number(ctx.params.id));
+  const text = typeof ctx.body.texto === 'string' ? ctx.body.texto.trim() : '';
+  if (!text) fail(400, 'Escreva uma mensagem.', { texto: 'Escreva uma mensagem.' });
+  if (text.length > 1000) fail(400, 'A mensagem pode ter no máximo 1000 caracteres.', { texto: 'Máximo de 1000 caracteres.' });
+  const id = await T.messages.insert({ client_id: p.client_id, provider_id: p.provider_id, sender_id: ctx.user.id, text, read: 0, created_at: now() });
+  return [201, { message: { id, text, mine: true, created_at: now() } }];
+});
+
+// ----- Avaliação (cliente avalia depois do serviço concluído) -----
+route('POST', '/api/orders/:id/avaliacao', { auth: true, roles: ['cliente'] }, async (ctx) => {
+  const o = await loadOrderFor(ctx.user, Number(ctx.params.id));
+  if (o.client_id !== ctx.user.id) fail(403, 'Só o cliente do pedido pode avaliar.');
+  if (o.status !== 'concluido') fail(409, 'Só dá para avaliar depois que o serviço for concluído.');
+  const stars = Number(ctx.body.nota);
+  if (!Number.isInteger(stars) || stars < 1 || stars > 5) fail(400, 'Dê uma nota de 1 a 5 estrelas.', { nota: 'Escolha de 1 a 5 estrelas.' });
+  const comment = typeof ctx.body.comentario === 'string' ? ctx.body.comentario.trim().slice(0, 300) : '';
+  await tx(async () => {
+    if (await T.reviews.first('order_id', '==', o.id)) fail(409, 'Você já avaliou este serviço.');
+    await T.reviews.insert({ order_id: o.id, provider_id: o.provider_id, client_id: o.client_id, stars, comment, created_at: now() });
+  });
+  return [201, { review: { stars, comment } }];
+});
+
+// ----- Perfil profissional -----
+async function perfilPublico(u) {
+  const r = (await ratingsByProvider()).get(u.id);
+  const services = (await T.services.where('provider_id', '==', u.id)).filter((s) => s.active && (!u.categories || u.categories.includes(s.category)));
+  const fotos = (await T.portfolio.where('provider_id', '==', u.id)).sort((a, b) => a.id - b.id);
+  const reviews = (await T.reviews.where('provider_id', '==', u.id)).sort((a, b) => b.id - a.id).slice(0, 5);
+  const um = await usersById();
+  return {
+    ...otherView(u), verified: !!u.cpf, visit_price: u.visit_price_cents ? u.visit_price_cents / 100 : null, categories: u.categories || null,
+    rating: r ? r.avg : null, reviews_count: r ? r.count : 0,
+    reviews: reviews.map((x) => ({ stars: x.stars, comment: x.comment, client_name: (um.get(x.client_id) || {}).name || 'Cliente' })),
+    services: services.map((s) => ({ id: s.id, title: s.title, category: s.category, price: s.price_cents / 100, duration_min: s.duration_min })),
+    portfolio: fotos.map((f) => ({ id: f.id, url: `/api/portfolio/${f.id}/foto` })),
+  };
+}
+route('GET', '/api/prestadores/:id', { auth: true }, async (ctx) => {
+  const u = await T.users.get(Number(ctx.params.id));
+  if (!u || u.role !== 'prestador' || !u.active) fail(404, 'Profissional não encontrado.');
+  return [200, { prestador: await perfilPublico(u) }];
+});
+route('GET', '/api/me/profissional', { auth: true, roles: ['prestador'] }, async (ctx) => [200, { prestador: await perfilPublico(ctx.user) }]);
+
+route('PATCH', '/api/me/profissional', { auth: true, roles: ['prestador'] }, async (ctx) => {
+  const b = ctx.body, patch = {}, errors = {};
+  if (b.specialty !== undefined) {
+    const sp = String(b.specialty || '').trim();
+    if (sp.length > 60) errors.specialty = 'Máximo de 60 caracteres.'; else patch.specialty = sp || null;
+  }
+  if (b.visit_price !== undefined) {
+    const v = Number(String(b.visit_price).replace(',', '.'));
+    if (!Number.isFinite(v) || v <= 0 || v > 100000) errors.visit_price = 'Informe um valor entre R$ 0,01 e R$ 100.000.';
+    else patch.visit_price_cents = Math.round(v * 100);
+  }
+  if (b.online !== undefined) patch.online = b.online ? 1 : 0;
+  if (b.categories !== undefined) {
+    if (!Array.isArray(b.categories) || b.categories.some((c) => !CATEGORY_NAMES.includes(c))) errors.categories = 'Categoria inválida.';
+    else patch.categories = [...new Set(b.categories)];
+  }
+  if (Object.keys(errors).length) fail(400, 'Dados inválidos.', errors);
+  if (Object.keys(patch).length) await T.users.update(ctx.user.id, patch);
+  const u = await T.users.get(ctx.user.id);
+  return [200, { user: publicUser(u), prestador: await perfilPublico(u) }];
+});
+
+// ----- Portfólio de trabalhos (fotos, até 6) -----
+route('POST', '/api/me/portfolio', { auth: true, roles: ['prestador'], bodyLimit: 400 * 1024 }, async (ctx) => {
+  const m = /^data:(image\/[a-z]+);base64,([A-Za-z0-9+/=]+)$/.exec(String(ctx.body.image || ''));
+  if (!m || !PHOTO_TYPES[m[1]]) fail(400, 'Envie uma imagem PNG, JPG ou WEBP.');
+  const buf = Buffer.from(m[2], 'base64');
+  if (!buf.length) fail(400, 'Imagem vazia.');
+  if (buf.length > MAX_PHOTO_BYTES) fail(413, 'A foto deve ter no máximo 200 KB.');
+  const real = sniffImage(buf);
+  if (!real) fail(400, 'O arquivo enviado não é uma imagem válida.');
+  if ((await T.portfolio.where('provider_id', '==', ctx.user.id)).length >= 6) fail(409, 'O portfólio aceita até 6 fotos. Remova uma para adicionar outra.');
+  const id = await T.portfolio.insert({ provider_id: ctx.user.id, mime: real, data: buf, created_at: now() });
+  return [201, { foto: { id, url: `/api/portfolio/${id}/foto` } }];
+});
+route('DELETE', '/api/me/portfolio/:id', { auth: true, roles: ['prestador'] }, async (ctx) => {
+  const f = await T.portfolio.get(Number(ctx.params.id));
+  if (!f || f.provider_id !== ctx.user.id) fail(404, 'Foto não encontrada.');
+  await T.portfolio.remove(f.id);
+  return [200, { ok: true }];
+});
+route('GET', '/api/portfolio/:id/foto', { auth: true }, async (ctx) => {
+  const f = await T.portfolio.get(Number(ctx.params.id));
+  if (!f) fail(404, 'Foto não encontrada.');
+  return [200, Buffer.from(f.data), { contentType: f.mime }];
+});
+
+// ----- Ganhos e Carteira (prestador) — SIMULADO, usa as cobranças do microsserviço de pagamentos -----
+async function carteira(user) {
+  const d = new Date(), monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+  const pagos = (await pag('GET', `/cobrancas?recebedor_id=${user.id}&limit=100`)).cobrancas.filter((c) => c.status === 'aprovado');
+  const orders = new Map((await T.orders.where('provider_id', '==', user.id)).map((o) => [o.id, o]));
+  const saques = (await T.withdrawals.where('provider_id', '==', user.id));
+  const cents = (v) => Math.round(v * 100);
+  let liberado = 0, pendente = 0, mes = 0;
+  for (const c of pagos) {
+    const o = orders.get(c.pedido_id);
+    if (o && o.status === 'concluido') liberado += cents(c.liquido); else pendente += cents(c.liquido);
+    if ((c.pago_em || 0) >= monthStart) mes += cents(c.liquido);
+  }
+  const sacado = saques.reduce((s, w) => s + w.valor_centavos, 0);
+  const historico = [
+    ...pagos.map((c) => ({ tipo: 'entrada', titulo: c.descricao, valor: c.liquido, quando: c.pago_em || c.criada_em, liberado: (orders.get(c.pedido_id) || {}).status === 'concluido' })),
+    ...saques.map((w) => ({ tipo: 'saque', titulo: 'Saque Pix efetuado', valor: w.valor_centavos / 100, quando: w.created_at })),
+  ].sort((a, b) => b.quando - a.quando).slice(0, 20);
+  return { disponivel: (liberado - sacado) / 100, pendente: pendente / 100, este_mes: mes / 100, historico, chave_pix: user.email };
+}
+route('GET', '/api/carteira', { auth: true, roles: ['prestador'] }, async (ctx) => [200, await carteira(ctx.user)]);
+route('POST', '/api/carteira/saque', { auth: true, roles: ['prestador'] }, async (ctx) => {
+  const valor = Number(String(ctx.body.valor ?? '').replace(',', '.'));
+  if (!Number.isFinite(valor) || valor <= 0) fail(400, 'Informe o valor do saque.', { valor: 'Informe um valor maior que zero.' });
+  const out = await tx(async () => {
+    const c = await carteira(ctx.user);
+    if (Math.round(valor * 100) > Math.round(c.disponivel * 100)) fail(400, `Você tem ${brl(c.disponivel)} disponível para saque.`, { valor: 'Valor maior que o saldo disponível.' });
+    await T.withdrawals.insert({ provider_id: ctx.user.id, valor_centavos: Math.round(valor * 100), created_at: now(), pix: ctx.user.email });
+    return carteira(ctx.user);
+  });
+  return [201, { ...out, mensagem: `Transferência de ${brl(valor)} enviada via Pix (simulação).` }];
 });
 
 // ---------- arquivos estáticos ----------

@@ -1,56 +1,29 @@
 // ===== Biko DEMO no navegador =====
 // Roda o MESMO código do backend (server.js, notificador.js e os dois microsserviços) dentro da
-// página, trocando só o que é do Node: node:sqlite -> sql.js, http -> fetch interceptado,
-// crypto -> Web Crypto. Os três "servidores" continuam separados, com bancos separados,
+// página, trocando só o que é do Node: http -> fetch interceptado, crypto -> Web Crypto.
+// Sem chave do Firebase, o firebase.js usa o Firestore em memória (o mesmo dos testes). Os três "servidores" continuam separados, com bancos separados,
 // e conversam por fetch como no projeto de verdade.
 (function () {
   'use strict';
   const Buffer = window.__BikoBuffer;
-  const SQL = window.__BikoSQL;
-  const STORE_KEY = 'biko-demo-v1';
+  const STORE_KEY = 'biko-demo-v2';
 
   // ---------- persistência leve (só neste navegador) ----------
   let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) { saved = {}; }
-  const dbs = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}', (k, v) => v); } catch (e) { saved = {}; }
   function b64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
   function unb64(s) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
   let saveTimer = null;
+  let fsdb = null; // Firestore em memória (preenchido depois que os módulos carregam)
+  // Uint8Array (fotos) vira { __b64 } no JSON
+  const enc = (k, v) => (v instanceof Uint8Array ? { __b64: b64(v) } : v);
+  const dec = (k, v) => (v && typeof v === 'object' && typeof v.__b64 === 'string' ? Buffer.from(unb64(v.__b64)) : v);
   function scheduleSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      try {
-        const out = { cookie: jar.cookie, dbs: {} };
-        for (const [k, d] of Object.entries(dbs)) out.dbs[k] = b64(d.export());
-        localStorage.setItem(STORE_KEY, JSON.stringify(out));
-      } catch (e) { /* sem localStorage: a demo só não lembra ao recarregar */ }
+      try { localStorage.setItem(STORE_KEY, JSON.stringify({ cookie: jar.cookie, firestore: fsdb ? fsdb._dump() : null }, enc)); }
+      catch (e) { /* sem localStorage: a demo só não lembra ao recarregar */ }
     }, 300);
-  }
-
-  // ---------- node:sqlite em cima do sql.js ----------
-  const norm = (p) => p.map((v) => (v === undefined ? null : typeof v === 'boolean' ? (v ? 1 : 0) : v === Infinity ? 9e15 : v));
-  class Stmt {
-    constructor(db, sql) { this.db = db; this.sql = sql; }
-    get(...p) { const s = this.db.prepare(this.sql); try { s.bind(norm(p)); return s.step() ? s.getAsObject() : undefined; } finally { s.free(); } }
-    all(...p) { const s = this.db.prepare(this.sql); const out = []; try { s.bind(norm(p)); while (s.step()) out.push(s.getAsObject()); } finally { s.free(); } return out; }
-    run(...p) {
-      const s = this.db.prepare(this.sql);
-      try { s.run(norm(p)); } finally { s.free(); }
-      const changes = this.db.getRowsModified();
-      const r = this.db.exec('SELECT last_insert_rowid()');
-      return { changes, lastInsertRowid: r.length ? r[0].values[0][0] : 0 };
-    }
-  }
-  class DatabaseSync {
-    constructor(file) {
-      const key = String(file);
-      const data = saved.dbs && saved.dbs[key];
-      // checkpoint de WAL não existe no sql.js; PRAGMA journal_mode é só ignorado
-      this.db = data ? new SQL.Database(unb64(data)) : new SQL.Database();
-      dbs[key] = this.db;
-    }
-    exec(sql) { this.db.exec(sql); }
-    prepare(sql) { return new Stmt(this.db, sql); }
   }
 
   // ---------- crypto ----------
@@ -79,7 +52,7 @@
     dirname: (p) => p.slice(0, p.lastIndexOf('/')) || '/',
     extname: (p) => { const m = /\.[^./]+$/.exec(p); return m ? m[0] : ''; },
   };
-  const fsMod = { readFile: (f, cb) => cb(new Error('sem arquivos na demo')) };
+  const fsMod = { readFile: (f, cb) => cb(new Error('sem arquivos na demo')), existsSync: () => false, readFileSync: () => { throw new Error('sem arquivos na demo'); } };
   const processShim = { env: {}, execPath: '', exitCode: 0, on() {}, exit() {} };
 
   // setInterval do Node tem .unref(); o do navegador não
@@ -114,7 +87,7 @@
   }
   function makeRequire(from) {
     return (req) => {
-      const core = { http: httpMod, fs: fsMod, path: pathMod, crypto: nodeCrypto, 'node:sqlite': { DatabaseSync } }[req];
+      const core = { http: httpMod, fs: fsMod, path: pathMod, crypto: nodeCrypto }[req];
       if (core) return core;
       const id = resolve(from, req);
       if (cache[id]) return cache[id].exports;
@@ -127,8 +100,13 @@
     };
   }
 
-  // Ordem de inicialização: microsserviços primeiro, depois a API
+  // Firestore em memória: restaura o que estava salvo neste navegador ANTES de a API gravar os dados de exemplo
   const req = makeRequire('/');
+  fsdb = req('./firebase.js').firestore();
+  if (saved.firestore) {
+    try { fsdb._load(JSON.parse(JSON.stringify(saved.firestore), dec)); } catch (e) { /* dados antigos: começa do zero */ }
+  }
+  // Ordem de inicialização: microsserviços primeiro, depois a API
   const notifServer = req('./notificacoes/server.js');
   const pagServer = req('./pagamentos/server.js');
   const apiServer = req('./server.js');

@@ -110,9 +110,20 @@ async function t(name, fn) {
     const r = await anon('POST', '/api/auth/register', { name: 'Hacker X', email: 'hacker@x.com', password: 'Senha1234', role: 'admin' });
     assert.strictEqual(r.data.user.role, 'cliente');
   });
-  await t('cadastro como prestador funciona', async () => {
-    const r = await anon('POST', '/api/auth/register', { name: 'Pedro Pedreiro', email: 'pedro@x.com', password: 'Senha1234', role: 'prestador' });
-    assert.strictEqual(r.data.user.role, 'prestador');
+  await t('cadastro como prestador exige CPF válido, maioridade e termos', async () => {
+    const base = { name: 'Pedro Pedreiro', email: 'pedro@x.com', password: 'Senha1234', role: 'prestador' };
+    const sem = await anon('POST', '/api/auth/register', base);
+    assert.strictEqual(sem.status, 400);
+    assert.ok(sem.data.fields.cpf && sem.data.fields.birth_date && sem.data.fields.terms);
+    const menor = new Date(); menor.setFullYear(menor.getFullYear() - 17);
+    const r17 = await anon('POST', '/api/auth/register', { ...base, cpf: '529.982.247-25', birth_date: menor.toISOString().slice(0, 10), terms: true });
+    assert.ok(/18 anos/.test(r17.data.fields.birth_date));
+    assert.strictEqual((await anon('POST', '/api/auth/register', { ...base, cpf: '123.456.789-00', birth_date: '15/08/1995', terms: true })).data.fields.cpf, 'CPF inválido. Confira os números.');
+    const ok = await anon('POST', '/api/auth/register', { ...base, cpf: '529.982.247-25', birth_date: '15/08/1995', terms: true });
+    assert.strictEqual(ok.data.user.role, 'prestador');
+    assert.strictEqual(ok.data.user.verified, true);
+    const v = (await anon('POST', '/api/auth/verificar-profissional', { cpf: '52998224725', birth_date: '1995-08-15' })).data;
+    assert.ok(v.cpf_ok && v.maior && v.idade >= 31);
   });
 
   // ---------- SESSÃO / LOGOUT ----------
@@ -241,7 +252,7 @@ async function t(name, fn) {
   const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
   async function newUser(email, name, role = 'cliente', password = 'Senha1234') {
     const c = client();
-    const r = await c('POST', '/api/auth/register', { name, email, phone: '(47) 98888-0000', password, role });
+    const r = await c('POST', '/api/auth/register', { name, email, phone: '(47) 98888-0000', password, role, ...(role === 'prestador' ? { cpf: '52998224725', birth_date: '1990-01-01', terms: true } : {}) });
     assert.strictEqual(r.status, 201, `cadastro de ${email}: ${r.data.error}`);
     return { c, id: r.data.user.id, email, password };
   }
@@ -1022,10 +1033,10 @@ async function t(name, fn) {
   // MICROSSERVIÇO DE PAGAMENTOS (simulado)
   // =====================================================================
   let oP;
-  await t('pagamento: só depois de confirmado; prestador não paga; fora do ar -> 503', async () => {
+  await t('pagamento: já ao agendar (pendente); prestador não paga; fora do ar -> 503', async () => {
     oP = (await book(cliente, vaza, D(48), '09:00')).data.order;
-    assert.strictEqual(oP.can_pay, false);
-    assert.strictEqual((await cliente('POST', `/api/orders/${oP.id}/pagamento`, { metodo: 'pix' })).status, 409);
+    assert.strictEqual(oP.can_pay, true);
+    assert.strictEqual(oP.total, 125); // R$ 120 + R$ 5 de Taxa de Proteção Biko
     await prest('POST', `/api/orders/${oP.id}/status`, { action: 'confirmar' });
     assert.strictEqual((await cliente('GET', `/api/orders/${oP.id}`)).data.order.can_pay, true);
     assert.strictEqual((await prest('GET', `/api/orders/${oP.id}`)).data.order.can_pay, false);
@@ -1057,7 +1068,8 @@ async function t(name, fn) {
     assert.strictEqual(c.data.order.payment.status, 'pago');
     assert.ok(/^BKP-/.test(c.data.order.payment.code));
     assert.strictEqual(c.data.order.can_pay, false);
-    assert.strictEqual(c.data.cobranca.taxa, 12);
+    assert.strictEqual(c.data.cobranca.valor, 125);
+    assert.strictEqual(c.data.cobranca.taxa, 17); // R$ 5 de proteção + 10% de R$ 120
     assert.strictEqual(c.data.cobranca.liquido, 108);
   });
   await t('pagamento: pagar de novo -> 409; histórico do pedido mostra "pago"', async () => {
@@ -1093,6 +1105,89 @@ async function t(name, fn) {
     assert.strictEqual(r.data.cobranca.status, 'aprovado');
     assert.deepStrictEqual(r.data.cobranca.cartao, { final: '4242', bandeira: 'Mastercard' });
     assert.strictEqual(r.data.cobranca.parcelas, 3);
+  });
+  // =====================================================================
+  // TELAS DO FIGMA: conversas, avaliação, perfil profissional, portfólio, carteira
+  // =====================================================================
+  const carlosId = vaza.provider_id;
+  await t('conversa: cliente manda, prestador vê na lista (não lida) e responde; admin e outro cliente não entram', async () => {
+    assert.strictEqual((await cliente('POST', `/api/conversas/${carlosId}`, { texto: '' })).status, 400);
+    assert.strictEqual((await cliente('POST', `/api/conversas/${carlosId}`, { texto: 'Olá Carlos! Tenho duas telhas quebradas.' })).status, 201);
+    const lista = (await prest('GET', '/api/conversas')).data;
+    const c = lista.conversas.find((x) => x.user.id === mariaId);
+    assert.ok(c && c.unread >= 1 && /telhas/.test(c.last.text));
+    const conv = (await prest('GET', `/api/conversas/${mariaId}`)).data;
+    assert.ok(conv.messages.some((m) => !m.mine && /telhas/.test(m.text)));
+    assert.strictEqual((await prest('GET', '/api/conversas')).data.conversas.find((x) => x.user.id === mariaId).unread, 0); // abriu = leu
+    await prest('POST', `/api/conversas/${mariaId}`, { texto: 'Consigo sim!' });
+    assert.ok((await cliente('GET', `/api/conversas/${carlosId}`)).data.messages.some((m) => !m.mine && m.text === 'Consigo sim!'));
+    assert.strictEqual((await admin('GET', '/api/conversas')).status, 403);
+    assert.strictEqual((await cliente('POST', `/api/conversas/${cliente2.id}`, { texto: 'oi' })).status, 400); // cliente com cliente
+  });
+  await t('avaliação: só depois de concluído, uma vez, nota 1–5; aparece na busca e no perfil', async () => {
+    const o = (await book(cliente, chuveiro, D(52), '09:00')).data.order;
+    assert.strictEqual((await cliente('POST', `/api/orders/${o.id}/avaliacao`, { nota: 5 })).status, 409);
+    await prest('POST', `/api/orders/${o.id}/status`, { action: 'confirmar' });
+    await prest('POST', `/api/orders/${o.id}/status`, { action: 'iniciar' });
+    await prest('POST', `/api/orders/${o.id}/status`, { action: 'concluir' });
+    assert.strictEqual((await cliente('GET', `/api/orders/${o.id}`)).data.order.can_review, true);
+    assert.strictEqual((await cliente('POST', `/api/orders/${o.id}/avaliacao`, { nota: 9 })).status, 400);
+    assert.strictEqual((await cliente('POST', `/api/orders/${o.id}/avaliacao`, { nota: 5, comentario: 'Ótimo!' })).status, 201);
+    assert.strictEqual((await cliente('POST', `/api/orders/${o.id}/avaliacao`, { nota: 4 })).status, 409);
+    const r = (await cliente('GET', '/api/search?q=chuveiro')).data.results[0];
+    assert.ok(r.provider_rating >= 1 && r.provider_reviews >= 1);
+    const p = (await cliente('GET', `/api/prestadores/${carlosId}`)).data.prestador;
+    assert.ok(p.reviews.some((x) => x.comment === 'Ótimo!'));
+  });
+  await t('perfil profissional: especialidade, valor base, online e categorias (categoria desligada some da busca)', async () => {
+    const r = await prest('PATCH', '/api/me/profissional', { specialty: 'Encanador e eletricista', visit_price: '130,00', online: false, categories: ['Encanador'] });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.data.user.visit_price, 130);
+    assert.strictEqual(r.data.user.online, false);
+    assert.strictEqual((await cliente('GET', '/api/search?q=chuveiro')).data.total, 0); // Eletricista desligado
+    assert.strictEqual((await prest('PATCH', '/api/me/profissional', { categories: ['Inventada'] })).status, 400);
+    await prest('PATCH', '/api/me/profissional', { online: true, categories: ['Encanador', 'Eletricista'] });
+    assert.strictEqual((await cliente('GET', '/api/search?q=chuveiro')).data.total, 1);
+    assert.strictEqual((await cliente('PATCH', '/api/me/profissional', { online: true })).status, 403);
+  });
+  await t('portfólio: adiciona, mostra no perfil, remove; não é de outro prestador', async () => {
+    const r = await prest('POST', '/api/me/portfolio', { image: PNG });
+    assert.strictEqual(r.status, 201);
+    assert.ok((await prest('GET', '/api/me/profissional')).data.prestador.portfolio.some((f) => f.id === r.data.foto.id));
+    assert.strictEqual((await fetch(base + r.data.foto.url, { headers: { Cookie: await cookieOf(cliente) } })).status, 200);
+    assert.strictEqual((await prest('DELETE', `/api/me/portfolio/${r.data.foto.id}`)).status, 200);
+    assert.strictEqual((await prest('DELETE', `/api/me/portfolio/${r.data.foto.id}`)).status, 404);
+  });
+  await t('carteira: pago e concluído fica disponível; saque não passa do saldo', async () => {
+    const o = (await book(cliente, vaza, D(53), '09:00')).data.order;
+    await cliente('POST', `/api/orders/${o.id}/pagamento`, { metodo: 'cartao', cartao: { final: '4242', bandeira: 'Visa', parcelas: 1 } });
+    const antes = (await prest('GET', '/api/carteira')).data;
+    assert.ok(antes.pendente >= 108);
+    await prest('POST', `/api/orders/${o.id}/status`, { action: 'confirmar' });
+    await prest('POST', `/api/orders/${o.id}/status`, { action: 'iniciar' });
+    await prest('POST', `/api/orders/${o.id}/status`, { action: 'concluir' });
+    const depois = (await prest('GET', '/api/carteira')).data;
+    assert.ok(depois.disponivel >= 108);
+    assert.strictEqual((await prest('POST', '/api/carteira/saque', { valor: depois.disponivel + 1 })).status, 400);
+    const s = await prest('POST', '/api/carteira/saque', { valor: 100 });
+    assert.strictEqual(s.status, 201);
+    assert.ok(Math.abs(s.data.disponivel - (depois.disponivel - 100)) < 0.01);
+    assert.strictEqual(s.data.historico[0].tipo, 'saque');
+    assert.strictEqual((await cliente('GET', '/api/carteira')).status, 403);
+  });
+  await t('login por telefone; prestador offline some da busca; ordenar por nota', async () => {
+    assert.strictEqual((await anon('POST', '/api/auth/login', { email: '(47) 99999-0003', password: 'Prestador@123' })).data.user.role, 'prestador');
+    await prest('PATCH', '/api/me/profissional', { online: false });
+    assert.ok(!(await cliente('GET', '/api/search')).data.results.some((r) => r.provider_id === carlosId));
+    await prest('PATCH', '/api/me/profissional', { online: true });
+    const r = (await cliente('GET', '/api/search?sort=nota')).data.results;
+    assert.ok(r[0].provider_rating >= (r[r.length - 1].provider_rating || 0));
+  });
+  await t('pedido recusado depois de pago é estornado', async () => {
+    const o = (await book(cliente, vaza, D(54), '09:00')).data.order;
+    await cliente('POST', `/api/orders/${o.id}/pagamento`, { metodo: 'cartao', cartao: { final: '4242', bandeira: 'Visa', parcelas: 1 } });
+    await prest('POST', `/api/orders/${o.id}/status`, { action: 'recusar', reason: 'Sem agenda' });
+    assert.strictEqual((await cliente('GET', `/api/orders/${o.id}`)).data.order.payment.status, 'estornado');
   });
   pms.close();
   ms.close();

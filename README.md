@@ -37,7 +37,7 @@ Abra http://localhost:3000.
 
 Para zerar tudo no Firebase, apague as coleções no console do Firestore (users, services, orders, order_events, sessions, password_resets, user_photos, notification_outbox, notificacoes, cobrancas e _contadores). Na próxima vez que subir, os dados de exemplo voltam.
 
-Testes automatizados (121 da API + 10 de cada microsserviço; usam o Firestore em memória e não mexem no seu Firebase):
+Testes automatizados (128 da API + 10 de cada microsserviço; usam o Firestore em memória e não mexem no seu Firebase):
 
 ```bash
 npm test
@@ -144,6 +144,31 @@ Detalhes, diagrama e roteiro de apresentação: [`notificacoes/PASSO_A_PASSO.md`
 - Processo separado (`pagamentos/`, porta 3002) com banco próprio (`pagamentos.db`).
 
 Detalhes e roteiro de apresentação: [`pagamentos/PASSO_A_PASSO.md`](pagamentos/PASSO_A_PASSO.md).
+
+## 9 — Telas do protótipo (Figma)
+
+O site segue as 15 telas do Figma (7 de usuário e 8 de prestador), com fonte Poppins, azul `#0A84FF` e laranja `#FF9500`.
+
+| Usuário (cliente) | Prestador |
+|---|---|
+| Login (e-mail **ou telefone**), Google/Apple só visuais | Login "Área do Prestador" |
+| Início com busca, card "Serviço rápido" e categorias | Cadastro com **Verificação do Profissional**: CPF válido + maior de 18 anos + termos |
+| Busca com profissionais, nota ⭐, Conversar / Agendar | Início: Online/Offline, ganhos da semana, solicitações (Aceitar/Recusar) |
+| Escolha de data (faixa de dias) e horários | Detalhes da Solicitação |
+| Pagamento Seguro: resumo + **Taxa de Proteção Biko (R$ 5,00)**, Pix ou cartão | Serviço em Andamento: linha do tempo, mapa ilustrativo, Iniciar/Concluir |
+| Pedido Confirmado | Sua Agenda: dias, compromissos, horários livres |
+| **Conversas** (chat com o profissional) | Ganhos e Carteira: saldo, pendente, saque via Pix (simulado) |
+| Agenda do cliente + **avaliação** depois do serviço | Perfil Profissional: categorias, valor da visita, serviços, portfólio de fotos |
+
+Mudanças de regra que vieram das telas:
+- O cliente **paga ao agendar** (antes só depois da confirmação). Se o prestador recusar ou cancelar, o valor é **estornado**.
+- Prestador **offline** ou com a categoria desligada não aparece na busca.
+- Busca pode ordenar por **melhor nota**.
+
+Rotas novas: `/api/conversas` (GET, `/:id` GET/POST), `/api/orders/:id/avaliacao` (POST), `/api/prestadores/:id` (GET), `/api/me/profissional` (GET/PATCH), `/api/me/portfolio` (POST, `/:id` DELETE), `/api/portfolio/:id/foto` (GET), `/api/carteira` (GET), `/api/carteira/saque` (POST), `/api/auth/verificar-profissional` (POST).
+Coleções novas no Firestore: `messages`, `reviews`, `portfolio`, `withdrawals`.
+
+O app Flutter (pasta `mobile/`) ainda está no visual antigo.
 
 ## Estrutura
 

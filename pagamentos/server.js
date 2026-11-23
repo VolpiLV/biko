@@ -104,7 +104,9 @@ route('POST', '/cobrancas', async (ctx) => {
     // um Pix antigo ainda aberto para o mesmo pedido é substituído pelo novo pedido de pagamento
     for (const c of doPedido) if (c.status === 'aguardando') await C.update(c.id, { status: 'expirado', motivo: 'Substituído por uma nova tentativa' });
 
-    const taxa = Math.round(b.valor_centavos * TAXA_PLATAFORMA);
+    // Taxa de Proteção (cobrada do cliente, fica com o Biko) + 10% sobre o valor do serviço
+    const protecao = Number.isInteger(b.taxa_protecao_centavos) && b.taxa_protecao_centavos >= 0 && b.taxa_protecao_centavos < b.valor_centavos ? b.taxa_protecao_centavos : 0;
+    const taxa = Math.round((b.valor_centavos - protecao) * TAXA_PLATAFORMA) + protecao;
     const base = {
       codigo: codigo(), pedido_id: b.pedido_id, descricao: String(b.descricao || 'Serviço Biko').slice(0, 120),
       pagador_id: b.pagador_id, pagador_nome: b.pagador_nome || null, recebedor_id: b.recebedor_id, recebedor_nome: b.recebedor_nome || null,

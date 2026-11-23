@@ -1,0 +1,65 @@
+HISTORICO DE PENSAMENTOS - TELAS DO FIGMA
+=========================================
+
+-------------------------------------------------------------------------
+O QUE FOI PEDIDO
+-------------------------------------------------------------------------
+
+  Deixar as telas de usuario e de prestador o mais parecidas possivel
+  com o prototipo do Figma (arquivo com as telas "Usua 1-7" e
+  "Prest 1-8"), mudando o visual E as telas.
+
+-------------------------------------------------------------------------
+RACIOCINIO
+-------------------------------------------------------------------------
+
+  - O Figma foi lido pelo conector do Figma. As 15 telas sao imagens
+    (prints), entao o visual foi reproduzido olhando cada uma: fonte
+    Poppins, azul #0A84FF, laranja #FF9500, verde do botao de pagar,
+    cartoes brancos arredondados e barra de navegacao embaixo.
+  - Varias telas mostravam coisas que o Biko nao tinha: conversas,
+    avaliacoes, verificacao de CPF, carteira, portfolio, online/offline.
+    Em vez de so desenhar, foram criadas as regras e rotas de verdade,
+    para tudo funcionar na apresentacao.
+  - O que nao da para ter de verdade ficou marcado como ilustrativo:
+    mapa ("Mapa ilustrativo"), login com Google/Apple (avisa que ainda
+    nao esta disponivel), envio de fotos no chat, distancia em km.
+  - No Figma o cliente paga antes do prestador aceitar. Para seguir
+    isso, o pagamento passou a valer para pedido pendente, e se o
+    prestador recusar ou cancelar o valor e estornado automaticamente.
+  - "Taxa de Protecao Biko" de R$ 5,00 cobrada do cliente (como no
+    Figma). O prestador continua recebendo 90% do servico.
+
+-------------------------------------------------------------------------
+TELAS
+-------------------------------------------------------------------------
+
+  Usuario: login (e-mail ou telefone), inicio, busca, escolha de data
+  e horario, pagamento seguro (Pix/cartao), pedido confirmado, chat,
+  agenda, detalhe do pedido com avaliacao, conta e pagamentos.
+
+  Prestador: login (area do prestador), verificacao do profissional
+  (CPF valido + 18 anos + termos), inicio (online, ganhos da semana,
+  solicitacoes), detalhes da solicitacao, servico em andamento, agenda
+  (dias, compromissos, horarios livres), ganhos e carteira (saque Pix
+  simulado), perfil profissional (categorias, valor da visita,
+  servicos, portfolio, avaliacoes).
+
+  Admin: nao existe no Figma; ganhou o mesmo visual.
+
+-------------------------------------------------------------------------
+TESTES E LINK
+-------------------------------------------------------------------------
+
+  - 128 testes da API (7 novos: conversa, avaliacao, perfil profissional,
+    portfolio, carteira, estorno ao recusar, login por telefone /
+    offline / ordenar por nota) + 10 + 10 dos microsservicos.
+  - Link de demonstracao atualizado (mesmo endereco). Agora ele roda o
+    codigo com Firebase, usando o Firestore em memoria.
+  - Para testar o CPF do prestador: 529.982.247-25.
+
+-------------------------------------------------------------------------
+PENDENTE
+-------------------------------------------------------------------------
+
+  - App Flutter (pasta mobile) ainda esta no visual antigo.
