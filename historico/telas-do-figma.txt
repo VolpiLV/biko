@@ -63,3 +63,20 @@ PENDENTE
 -------------------------------------------------------------------------
 
   - App Flutter (pasta mobile) ainda esta no visual antigo.
+
+-------------------------------------------------------------------------
+CORRECOES PEDIDAS DEPOIS (com prints)
+-------------------------------------------------------------------------
+
+  1. Tela inicial com conteudo cortado e cartoes por cima dos chips.
+     Causa: a tela e uma coluna flex que rola; blocos com "overflow"
+     (lista de chips, cartoes de pagamento) estavam sendo espremidos.
+     Correcao: nenhum bloco da tela encolhe (flex-shrink: 0). No celular
+     a moldura ocupa a tela inteira e o conteudo rola por dentro, com a
+     barra de baixo fixa.
+  2. Pagamento "congelado" (nao rolava) e cartao cortado: mesma causa.
+     Alem disso, como recomendado, nenhuma forma vem escolhida: o QR do
+     Pix so aparece depois de tocar em Pix (o botao mostra "Escolha como
+     pagar" ate escolher). Tocar de novo fecha a opcao.
+  3. Logo: trocado para o do Figma, quadrado azul com o "B" branco, no
+     login do cliente e no topo da tela inicial.

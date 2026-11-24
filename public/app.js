@@ -175,8 +175,8 @@ const P = {
   apple: '<path d="M16.4 12.6c0-2.4 2-3.5 2-3.6-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.2-2.8.8-3.5.8s-1.8-.8-3-.8A4.5 4.5 0 0 0 4.7 9.6c-1.6 2.8-.4 6.9 1.1 9.1.8 1.1 1.7 2.3 2.8 2.3 1.1-.1 1.6-.7 2.9-.7s1.7.7 2.9.7c1.2 0 2-1.1 2.7-2.2a9.6 9.6 0 0 0 1.2-2.5 3.9 3.9 0 0 1-1.9-3.7zM14.2 5.6A3.9 3.9 0 0 0 15.1 2.8a4 4 0 0 0-2.6 1.3 3.7 3.7 0 0 0-.9 2.7 3.3 3.3 0 0 0 2.6-1.2z" fill="currentColor" stroke="none"/>',
 };
 const ic = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
-// Logo do app (quadrado escuro com o "b" azul e laranja, como no Figma)
-const LOGO = `<svg viewBox="0 0 48 48" width="50" height="50" aria-label="Biko"><rect x="10" y="8" width="8" height="30" rx="4" fill="#1d8cff"/><path d="M18 14h8a9 9 0 0 1 0 18h-8" fill="none" stroke="#1d8cff" stroke-width="8" stroke-linejoin="round"/><path d="M26 32a9 9 0 0 0 9-9h-9z" fill="#ff9500"/><rect x="18" y="25" width="17" height="13" rx="3" fill="#ff9500"/></svg>`;
+const LOGO = `<div class="app-logo blue">B</div>`; // logo do Biko como no Figma: quadrado azul com o "B" branco
+const logoSm = (size = 40) => `<div class="app-logo blue" style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.28)}px;font-size:${Math.round(size * 0.46)}px;box-shadow:none">B</div>`;
 
 // Avatar: foto (se houver) ou iniciais do nome
 function avatarHtml(u, cls = '') {
@@ -218,7 +218,7 @@ function viewLogin() {
         <div style="margin-top:12px"><button class="link" id="switchMode" style="color:var(--muted)">← Sou cliente</button></div>${DEMO_ACCOUNTS}</div>
     </div></div>`
     : `<div class="screen white"><div class="auth">
-      <div class="logo-wrap"><div class="app-logo">${LOGO}</div></div>
+      <div class="logo-wrap">${LOGO}</div>
       <div class="brand">biko</div>
       <div class="tagline">O serviço que você precisa, no preço<br>e tempo que você pode.</div>
       ${form}
@@ -668,7 +668,7 @@ screen('home', {
     const sel = state.homeCat || '';
     const list = CATS.filter((c) => !sel || c.nome === sel);
     return `<div class="hero">
-        <div class="who"><button class="icon-btn" id="me" style="background:rgba(255,255,255,.16);border:0;padding:0;overflow:hidden" aria-label="Minha conta">${u.photo_url ? avatarHtml(u, 'sq') : `<div class="avatar sq" style="background:#0b1020">${LOGO.replace('width="50" height="50"', 'width="30" height="30"')}</div>`}</button>
+        <div class="who"><button class="icon-btn" id="me" style="background:rgba(255,255,255,.16);border:0;padding:0;overflow:hidden" aria-label="Minha conta">${u.photo_url ? avatarHtml(u, 'sq') : logoSm(42)}</button>
           <div><b>Olá, ${esc(first(u.name))} 👋</b><small>O que precisa arrumar hoje?</small></div>${bellHtml()}</div>
         <form class="search-box" id="hs">${ic('search')}<input id="hq" type="search" placeholder="Busque ex: Arrumar telha, encanador..." maxlength="80"></form>
       </div>
@@ -856,7 +856,7 @@ const bandeiraDe = (num) => (/^4/.test(num) ? 'Visa' : /^5[1-5]/.test(num) ? 'Ma
 screen('pay', {
   async html({ id }) {
     const o = (await api('GET', `/api/orders/${id}`)).order;
-    this.o = o; this.method = this.method || 'pix'; this.pix = null;
+    this.o = o; if (this.orderId !== o.id) { this.method = null; this.orderId = o.id; } this.pix = null;
     if (!o.can_pay) return `${topbar('Pagamento Seguro')}<div class="empty">Este pedido já foi pago ou não pode mais ser pago.</div><div class="pad"><button class="btn" data-order="${o.id}">Ver pedido</button></div>`;
     const m = this.method;
     return `${topbar('Pagamento Seguro')}
@@ -879,16 +879,18 @@ screen('pay', {
           <p class="small muted" style="margin:10px 0 0">Teste: 4242 4242 4242 4242 aprova; final 0002 é recusado. Só os 4 últimos dígitos saem do aparelho.</p>
         </form>` : ''}</div>
       <div class="demo-note">🧪 Ambiente de demonstração (TCC): nenhum valor é cobrado. Não use dados reais.</div>
-      <div class="pad"><button class="btn green" id="confirmPay">${ic('lock')} Confirmar Pagamento ${brl(o.total)}</button>
+      <div class="pad"><button class="btn green" id="confirmPay" ${m ? '' : 'disabled'}>${ic('lock')} ${m ? `Confirmar Pagamento ${brl(o.total)}` : 'Escolha como pagar'}</button>
         <button class="link" id="later" style="display:block;margin:14px auto 0;color:var(--muted)">Pagar depois</button></div>`;
   },
   async bind({ id }) {
     const self = this, o = this.o;
     if (!o.can_pay) return;
-    $app.querySelectorAll('[data-m] .head').forEach((h) => (h.onclick = () => { self.method = h.parentElement.dataset.m; renderApp(); }));
+    // tocar na forma já aberta fecha ela de novo
+    $app.querySelectorAll('[data-m] .head').forEach((h) => (h.onclick = () => { const m = h.parentElement.dataset.m; self.method = self.method === m ? null : m; renderApp(); }));
     document.getElementById('later').onclick = () => replace('confirmed', { id, paid: false });
     const btn = document.getElementById('confirmPay');
-    const done = () => { self.method = 'pix'; replace('confirmed', { id, paid: true }); };
+    const done = () => { self.method = null; replace('confirmed', { id, paid: true }); };
+    if (!self.method) return;
     if (self.method === 'pix') {
       try {
         // Reaproveita um Pix que já esteja aguardando; senão gera um novo

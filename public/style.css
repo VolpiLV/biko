@@ -417,3 +417,10 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--blue); pad
 .screen.white { background: #fff; }
 a.btn { text-decoration: none; }
 a.icon-btn { text-decoration: none; }
+/* Dentro da tela que rola, nenhum bloco pode ser "espremido": sem isso a lista de chips e os
+   cartões de pagamento (que têm overflow) encolhiam e o conteúdo aparecia cortado/sobreposto. */
+.screen > * { flex-shrink: 0; }
+.screen.chat-screen > .msgs { flex: 1 1 auto; flex-shrink: 1; min-height: 0; }
+.hero .app-logo.blue { border: 2px solid rgba(255,255,255,.35); }
+/* No celular a "moldura" ocupa a tela inteira: o conteúdo rola por dentro e a barra de baixo fica fixa */
+@media (max-width: 479px) { .phone { min-height: 0; height: 100vh; height: 100dvh; } }
