@@ -32,8 +32,9 @@ class ApiClient {
 
   static BaseOptions _defaultOptions() => BaseOptions(
         baseUrl: Env.apiBaseUrl,
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 15),
+        // Folgado de propósito: no plano gratuito do Render o servidor "dorme" e leva ~50 s para acordar.
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 60),
         headers: const {'Accept': 'application/json'},
       );
 

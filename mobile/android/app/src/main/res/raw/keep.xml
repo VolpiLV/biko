@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- O ícone das notificações é usado pelo nome (no código Dart), então o build de release não pode removê-lo. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_biko,@color/biko_blue" />

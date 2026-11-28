@@ -45,7 +45,8 @@ const newUser = (name, email, phone, password, role) => ({
 // Dados de demonstração (só se o banco estiver vazio). Roda uma vez quando a API sobe.
 async function seed() {
   if ((await T.users.all()).length === 0) {
-    await T.users.insert(newUser('Administrador Biko', 'admin@biko.com', '(47) 99999-0001', 'Admin@123', 'admin'));
+    // Na internet a senha do admin vem do servidor (ADMIN_PASSWORD); a de exemplo só vale no computador.
+    await T.users.insert(newUser('Administrador Biko', 'admin@biko.com', '(47) 99999-0001', process.env.ADMIN_PASSWORD || 'Admin@123', 'admin'));
     await T.users.insert(newUser('Maria Cliente', 'cliente@biko.com', '(47) 99999-0002', 'Cliente@123', 'cliente'));
     await T.users.insert(newUser('Carlos Silva', 'prestador@biko.com', '(47) 99999-0003', 'Prestador@123', 'prestador'));
   }

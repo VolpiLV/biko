@@ -1,22 +1,42 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../../core/theme/app_tokens.dart';
+import '../../../core/theme/biko_colors.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/user_role.dart';
+import '../../../data/remote/payment_service.dart';
 import '../../../shared/widgets/app_snackbar.dart';
 import '../../../shared/widgets/app_ui.dart';
+import '../../../shared/widgets/biko_ui.dart';
 import '../../../shared/widgets/state_views.dart';
+import '../../auth/viewmodels/session_view_model.dart';
 import '../viewmodels/sales_view_model.dart';
-import '../widgets/payment_widgets.dart';
 import 'receipt_sheet.dart';
 
-/// Aba "Pagamentos" (cliente) ou "Vendas" (prestador e admin). Pagamento SIMULADO.
+/// "Meus Pagamentos" do cliente (aberto pela Agenda ou pela Conta).
+class PaymentsScreen extends StatelessWidget {
+  const PaymentsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final role = context.read<SessionViewModel>().user?.role ?? UserRole.cliente;
+    return ChangeNotifierProvider(
+      create: (_) => SalesViewModel(context.read<PaymentService>()),
+      child: Scaffold(
+        appBar: bikoAppBar(context, role == UserRole.cliente ? 'Meus Pagamentos' : 'Vendas'),
+        body: SalesTab(role: role, withTitle: false),
+      ),
+    );
+  }
+}
+
+/// Aba "Vendas" (admin) ou lista de pagamentos (cliente). Pagamento SIMULADO.
 class SalesTab extends StatefulWidget {
-  const SalesTab({super.key, required this.role});
+  const SalesTab({super.key, required this.role, this.withTitle = true});
 
   final UserRole role;
+  final bool withTitle;
 
   @override
   State<SalesTab> createState() => _SalesTabState();
@@ -38,54 +58,63 @@ class _SalesTabState extends State<SalesTab> {
     if (vm.takeLoadMoreError() case final msg?) showAppSnackBar(context, msg, error: true);
   }
 
-  List<StatTile> _tiles(SalesSummary s) => switch (widget.role) {
-        UserRole.cliente => [
-            StatTile(value: '${s.sales}', label: 'Pagamentos'),
-            StatTile(value: Fmt.brl(s.gross), label: 'Total pago'),
-            StatTile(value: '${s.refunds}', label: 'Estornos'),
-          ],
-        UserRole.prestador => [
-            StatTile(value: Fmt.brl(s.gross), label: 'Total vendido'),
-            StatTile(value: Fmt.brl(s.fee), label: 'Taxa Biko (10%)'),
-            StatTile(value: Fmt.brl(s.net), label: 'Você recebe'),
-          ],
-        UserRole.admin => [
-            StatTile(value: Fmt.brl(s.gross), label: 'Vendido na plataforma'),
-            StatTile(value: Fmt.brl(s.fee), label: 'Taxa Biko (10%)'),
-            StatTile(value: Fmt.brl(s.net), label: 'Repassado'),
-          ],
-      };
+  List<(String, String)> _stats(SalesSummary s) => widget.role == UserRole.cliente
+      ? [('${s.sales}', 'Pagamentos'), (Fmt.brl(s.gross), 'Total pago'), ('${s.refunds}', 'Estornos')]
+      : [(Fmt.brl(s.gross), 'Vendido'), (Fmt.brl(s.fee), 'Taxas Biko'), (Fmt.brl(s.net), 'Repassado')];
 
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<SalesViewModel>();
     final role = widget.role;
-    return TabPage(
+    final c = context.bikoColors;
+    return BikoPage(
       onRefresh: vm.refresh,
       children: [
-        const DemoNote(),
+        if (widget.withTitle) const PageTitle('Vendas') else const SizedBox(height: 8),
+        const DemoBanner('Pagamentos simulados (TCC): nenhum valor é cobrado de verdade.'),
         if (vm.loading && !vm.loaded)
-          const Padding(padding: EdgeInsets.all(AppSpacing.xl), child: LoadingView())
+          const SizedBox(height: 240, child: LoadingView())
         else if (vm.errorMessage case final msg? when vm.items.isEmpty)
-          Padding(padding: const EdgeInsets.all(AppSpacing.xl), child: ErrorView(message: msg, onRetry: vm.refresh))
+          SizedBox(height: 280, child: ErrorView(message: msg, onRetry: vm.refresh))
         else ...[
-          if (vm.loading) const LinearProgressIndicator(),
-          StatRow(tiles: _tiles(vm.summary)),
-          CountLabel('${vm.total} transação(ões) · ${vm.summary.pix} Pix · ${vm.summary.card} cartão'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                for (final (i, (value, label)) in _stats(vm.summary).indexed) ...[
+                  if (i > 0) const SizedBox(width: 10),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+                      decoration: BoxDecoration(
+                        color: c.card,
+                        border: Border.all(color: c.line),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        children: [
+                          FittedBox(child: Text(value, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: c.ink))),
+                          Text(label, textAlign: TextAlign.center, style: TextStyle(color: c.muted, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
+            child: Text(
+              '${vm.total} transação(ões) · ${vm.summary.pix} Pix · ${vm.summary.card} cartão',
+              style: TextStyle(color: c.muted, fontSize: 12.5),
+            ),
+          ),
           if (vm.items.isEmpty)
-            EmptyView(
-              icon: Icons.receipt_long_outlined,
-              message: role == UserRole.cliente
-                  ? 'Você ainda não pagou nenhum pedido.\nQuando o prestador confirmar um pedido, o botão Pagar aparece nele.'
-                  : 'Nenhuma venda ainda.',
-            )
+            EmptyText(role == UserRole.cliente ? 'Você ainda não pagou nenhum pedido.' : 'Nenhuma venda ainda.')
           else
-            for (final c in vm.items)
-              _ChargeCard(
-                charge: c,
-                role: role,
-                onTap: () => showReceiptSheet(context, c, seller: role != UserRole.cliente),
-              ),
+            for (final ch in vm.items)
+              _ChargeRow(charge: ch, role: role, onTap: () => showReceiptSheet(context, ch, seller: role != UserRole.cliente)),
           LoadMoreButton(visible: vm.hasMore, loading: vm.loadingMore, onPressed: _loadMore),
         ],
       ],
@@ -93,8 +122,8 @@ class _SalesTabState extends State<SalesTab> {
   }
 }
 
-class _ChargeCard extends StatelessWidget {
-  const _ChargeCard({required this.charge, required this.role, required this.onTap});
+class _ChargeRow extends StatelessWidget {
+  const _ChargeRow({required this.charge, required this.role, required this.onTap});
 
   final Charge charge;
   final UserRole role;
@@ -102,53 +131,47 @@ class _ChargeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final c = charge;
-    final who = switch (role) {
-      UserRole.cliente => c.receiver.name ?? '',
-      UserRole.prestador => c.payer.name ?? '',
-      UserRole.admin => '${c.payer.name ?? ''} → ${c.receiver.name ?? ''}',
+    final c = context.bikoColors;
+    final ch = charge;
+    final approved = ch.status == ChargeStatus.aprovado;
+    final who = role == UserRole.cliente ? (ch.receiver.name ?? '') : '${ch.payer.name ?? ''} → ${ch.receiver.name ?? ''}';
+    final tone = switch (ch.status) {
+      ChargeStatus.aprovado => TagTone.green,
+      ChargeStatus.aguardando => TagTone.orange,
+      ChargeStatus.estornado => TagTone.purple,
+      ChargeStatus.recusado || ChargeStatus.expirado => TagTone.red,
+      ChargeStatus.outro => TagTone.gray,
     };
-    return Card(
-      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Row(
+    return BikoCard(
+      onTap: onTap,
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(color: approved ? c.greenSoft : c.neutralSoft, borderRadius: BorderRadius.circular(12)),
+            child: Icon(ch.method == PaymentMethod.pix ? Icons.pix : Icons.credit_card, color: approved ? c.green : c.muted, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(ch.description, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5, color: c.ink)),
+                Text('$who · ${ch.code}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.muted, fontSize: 12.5)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              CircleAvatar(
-                backgroundColor: theme.colorScheme.primaryContainer,
-                foregroundColor: theme.colorScheme.onPrimaryContainer,
-                child: Icon(c.method == PaymentMethod.pix ? Icons.pix : Icons.credit_card),
-              ),
-              const SizedBox(width: AppSpacing.md - 4),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(c.description, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-                    if (who.isNotEmpty) Text(who, style: theme.textTheme.bodySmall),
-                    Text('${c.methodLabel} · ${c.code}', style: theme.textTheme.bodySmall),
-                  ],
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  ChargePill(status: c.status),
-                  const SizedBox(height: AppSpacing.sm),
-                  Text(
-                    Fmt.brl(role == UserRole.prestador ? c.net : c.amount),
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
+              Tag(ch.status.label, tone: tone),
+              const SizedBox(height: 4),
+              Text(Fmt.brl(ch.amount), style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: c.ink)),
             ],
           ),
-        ),
+        ],
       ),
     );
   }

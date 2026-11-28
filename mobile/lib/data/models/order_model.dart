@@ -23,12 +23,12 @@ enum OrderStatus {
 
 /// Ações que o usuário pode fazer num pedido (a API diz quais valem em `actions`).
 enum OrderAction {
-  confirmar('confirmar', 'Confirmar pedido', 'Pedido confirmado.'),
+  confirmar('confirmar', 'Aceitar pedido', 'Pedido aceito. O cliente foi avisado.'),
   recusar('recusar', 'Recusar', 'Pedido recusado.'),
   atrasar('atrasar', 'Avisar atraso / imprevisto', 'Cliente avisado. O horário foi adiado.'),
-  iniciar('iniciar', 'Iniciar atendimento', 'Atendimento iniciado.'),
+  iniciar('iniciar', 'Cheguei ao local / Iniciar', 'Atendimento iniciado. O cliente foi avisado.'),
   estender('estender', 'Preciso de mais tempo', 'Tempo prorrogado. A agenda foi ajustada.'),
-  concluir('concluir', 'Marcar como concluído', 'Pedido concluído.'),
+  concluir('concluir', 'Concluir serviço', 'Serviço concluído!'),
   cancelar('cancelar', 'Cancelar pedido', 'Pedido cancelado.');
 
   const OrderAction(this.apiValue, this.label, this.doneMessage);
@@ -129,7 +129,25 @@ class OrderModel {
     this.realDurationMin,
     this.payment,
     this.canPay = false,
-  });
+    this.protectionFee = 0,
+    double? total,
+    this.canReview = false,
+    this.review,
+    this.clientSince,
+  }) : total = total ?? price + protectionFee;
+
+  /// Taxa de Proteção Biko cobrada do cliente (R$ 5,00 no Figma).
+  final double protectionFee;
+
+  /// Serviço + taxa de proteção: o que o cliente paga.
+  final double total;
+
+  /// Cliente pode avaliar (serviço concluído e ainda sem avaliação).
+  final bool canReview;
+  final OrderReview? review;
+
+  /// Desde quando o cliente usa o Biko ("Cliente Biko desde nov/2026").
+  final DateTime? clientSince;
 
   final int id;
   final OrderStatus status;
@@ -214,8 +232,35 @@ class OrderModel {
       realDurationMin: readNumOrNull(json, 'real_duration_min')?.round(),
       payment: json['payment'] is Map<String, dynamic> ? OrderPayment.fromJson(readMap(json, 'payment')) : null,
       canPay: json['can_pay'] == true,
+      protectionFee: readNumOrNull(json, 'protection_fee') ?? 0,
+      total: readNumOrNull(json, 'total'),
+      canReview: json['can_review'] == true,
+      review: json['review'] is Map<String, dynamic> ? OrderReview.fromJson(readMap(json, 'review')) : null,
+      clientSince: readDateFlexibleOrNull(json, 'client_since'),
     );
   }
+
+  bool get isActive => status == OrderStatus.pendente || status == OrderStatus.confirmado;
+
+  /// Data e hora de início no fuso do aparelho.
+  DateTime get startsAt {
+    final p = date.split('-').map(int.parse).toList();
+    return DateTime(p[0], p[1], p[2], int.parse(time.substring(0, 2)), int.parse(time.substring(3, 5)));
+  }
+
+  /// "Iniciar" mais de 30 min antes do horário é uma antecipação (pede confirmação).
+  bool isEarlyStart(DateTime now) => startsAt.difference(now) > const Duration(minutes: 30);
+}
+
+/// Avaliação que o cliente deu depois do serviço.
+class OrderReview {
+  const OrderReview({required this.stars, this.comment});
+
+  final int stars;
+  final String? comment;
+
+  factory OrderReview.fromJson(Map<String, dynamic> json) =>
+      OrderReview(stars: readInt(json, 'stars'), comment: readStringOrNull(json, 'comment'));
 }
 
 /// Situação do pagamento guardada no pedido (o detalhe completo fica no microsserviço).

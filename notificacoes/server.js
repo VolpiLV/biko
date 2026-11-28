@@ -9,6 +9,7 @@ const http = require('http');
 const { modoFirestore } = require('../firebase');
 const crypto = require('crypto');
 const { N, exclusivo } = require('./db');
+const push = require('./push');
 
 const SERVICE_KEY = process.env.NOTIF_KEY || 'biko-dev-key';
 const now = () => Date.now();
@@ -88,16 +89,20 @@ route('POST', '/eventos', async (ctx) => {
   if (!regra) return [200, { criadas: 0, ignorado: `ação "${e.acao}" não gera notificação` }];
   const texto = regra.texto(e).slice(0, 400);
   // uma por vez: o mesmo evento chegando 2 vezes (reenvio) não duplica a notificação
-  const criadas = await exclusivo(async () => {
-    let n = 0;
+  const novas = await exclusivo(async () => {
+    const lista = [];
     for (const uid of destinatarios(e, regra)) {
       if (await N.first('evento_id', '==', e.evento_id, 'usuario_id', '==', uid)) continue;
-      await N.insert({ evento_id: e.evento_id, usuario_id: uid, acao: e.acao, titulo: regra.titulo, mensagem: texto, pedido_id: e.pedido.id, lida: 0, criada_em: now() });
-      n++;
+      const n = { evento_id: e.evento_id, usuario_id: uid, acao: e.acao, titulo: regra.titulo, mensagem: texto, pedido_id: e.pedido.id, lida: 0, criada_em: now() };
+      n.id = await N.insert(n);
+      lista.push(n);
     }
-    return n;
+    return lista;
   });
-  return [200, { criadas }];
+  // Pop-up no celular (push). Sem esperar: a API não fica presa ao Firebase. Um reenvio do
+  // mesmo evento não cria notificação nova, então também não manda push repetido.
+  for (const n of novas) push.enviar(n);
+  return [200, { criadas: novas.length }];
 });
 
 // Lista as notificações de um usuário (mais novas primeiro). ?nao_lidas=1 filtra só as não lidas.
@@ -127,6 +132,20 @@ route('POST', '/usuarios/:uid/notificacoes/lidas', async (ctx) => {
   const abertas = await N.where('usuario_id', '==', uid, 'lida', '==', 0);
   await Promise.all(abertas.map((n) => N.update(n.id, { lida: 1 })));
   return [200, { ok: true, marcadas: abertas.length, nao_lidas: 0 }];
+});
+
+// Aparelhos para o push. A API principal manda o id de quem está logado e o token do aparelho.
+route('POST', '/dispositivos', async (ctx) => {
+  const { usuario_id: uid, token, plataforma } = ctx.body;
+  if (!Number.isInteger(uid) || uid < 1) fail(400, 'usuario_id inválido.');
+  if (!push.tokenValido(token)) fail(400, 'Token do aparelho inválido.');
+  await push.registrar(uid, token, plataforma);
+  return [200, { ok: true, push_ligado: push.ligado() }];
+});
+route('POST', '/dispositivos/remover', async (ctx) => {
+  if (!push.tokenValido(ctx.body.token)) fail(400, 'Token do aparelho inválido.');
+  await push.remover(ctx.body.token);
+  return [200, { ok: true }];
 });
 
 // ---------- servidor ----------
@@ -162,3 +181,4 @@ if (require.main === module) {
 }
 module.exports = server;
 module.exports.ACOES = ACOES;
+module.exports.push = push;

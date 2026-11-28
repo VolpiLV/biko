@@ -62,6 +62,7 @@ class FakeAuthService implements AuthService {
   AppException? logoutError;
   int logoutCalls = 0;
   String? lastLoginEmail;
+  ProfessionalCheck? lastProfessional;
 
   @override
   Future<AuthResult> login({
@@ -81,7 +82,9 @@ class FakeAuthService implements AuthService {
     required String password,
     required UserRole role,
     String? phone,
+    ProfessionalCheck? professional,
   }) async {
+    lastProfessional = professional;
     final error = registerError;
     if (error != null) throw error;
     return registerResult ?? sampleAuthResult();

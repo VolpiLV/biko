@@ -6,10 +6,13 @@ plugins {
 
 android {
     namespace = "com.biko.biko_mobile"
-    compileSdk = flutter.compileSdkVersion
+    // 37: exigido pelo flutter_local_notifications. Não muda em quais Androids o app roda (isso é o minSdk).
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Exigido pelo flutter_local_notifications (pop-ups de notificação).
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -46,4 +49,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

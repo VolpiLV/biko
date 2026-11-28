@@ -5,16 +5,19 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
+import 'core/notifications/system_notifications.dart';
 import 'core/network/api_client.dart';
 import 'data/local/preferences_store.dart';
 import 'data/local/token_storage.dart';
 import 'data/remote/admin_service.dart';
 import 'data/remote/auth_service.dart';
 import 'data/remote/catalog_service.dart';
+import 'data/remote/chat_service.dart';
 import 'data/remote/notification_service.dart';
 import 'data/remote/order_service.dart';
 import 'data/remote/payment_service.dart';
 import 'data/remote/profile_service.dart';
+import 'data/remote/provider_service.dart';
 import 'data/repositories/auth_repository.dart';
 import 'features/auth/viewmodels/session_view_model.dart';
 import 'features/settings/viewmodels/theme_view_model.dart';
@@ -24,12 +27,12 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final preferences = PreferencesStore(await SharedPreferences.getInstance());
+  // Pop-ups de notificação no celular (e push com o app fechado, se o Firebase estiver configurado).
+  final push = PushNotifications();
+  await push.init();
   final tokenStorage = SecureTokenStorage();
   final api = ApiClient(tokenStorage: tokenStorage);
-  final authRepository = AuthRepository(
-    service: AuthService(api),
-    tokens: tokenStorage,
-  );
+  final authRepository = AuthRepository(service: AuthService(api), tokens: tokenStorage);
   final session = SessionViewModel(authRepository, api.onUnauthorized);
   unawaited(session.restore());
 
@@ -42,13 +45,15 @@ Future<void> main() async {
         Provider<OrderService>.value(value: OrderService(api)),
         Provider<AdminService>.value(value: AdminService(api)),
         Provider<ProfileService>.value(value: ProfileService(api)),
+        // telas do Figma: conversas, perfil profissional, portfólio e carteira
+        Provider<ChatService>.value(value: ChatService(api)),
+        Provider<ProviderService>.value(value: ProviderService(api)),
         // microsserviços (a API principal repassa as chamadas)
         Provider<NotificationService>.value(value: NotificationService(api)),
         Provider<PaymentService>.value(value: PaymentService(api)),
+        Provider<PushNotifications>.value(value: push),
         ChangeNotifierProvider<SessionViewModel>.value(value: session),
-        ChangeNotifierProvider<ThemeViewModel>(
-          create: (_) => ThemeViewModel(preferences),
-        ),
+        ChangeNotifierProvider<ThemeViewModel>(create: (_) => ThemeViewModel(preferences)),
       ],
       child: const BikoApp(),
     ),

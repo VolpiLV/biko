@@ -68,7 +68,7 @@ void main() {
       await tester.pumpWidget(h.login());
       await tester.tap(find.text('Entrar'));
       await tester.pump();
-      expect(find.text('Informe o e-mail.'), findsOneWidget);
+      expect(find.text('Informe o e-mail ou telefone.'), findsOneWidget);
       expect(find.text('Informe a senha.'), findsOneWidget);
       expect(h.service.lastLoginEmail, isNull);
     });
@@ -108,6 +108,7 @@ void main() {
 
       final h = _Harness();
       await tester.pumpWidget(h.login(theme: AppTheme.dark));
+      await tester.ensureVisible(find.text('Entrar'));
       await tester.tap(find.text('Entrar'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);

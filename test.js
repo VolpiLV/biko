@@ -997,6 +997,27 @@ async function t(name, fn) {
     assert.strictEqual(n.titulo, 'Aviso de atraso');
     assert.ok(/Pneu furado/.test(n.mensagem) && /08:30/.test(n.mensagem));
   });
+  await t('push: aparelho registrado recebe o pop-up; logout desliga o push daquele aparelho', async () => {
+    const enviados = [];
+    ms.push.usarEnviador(async (msg) => { enviados.push(msg); return { successCount: 1, responses: msg.tokens.map(() => ({ success: true })) }; });
+    const cel = client();
+    await cel('POST', '/api/auth/login', { email: 'cliente@biko.com', password: 'Cliente@123' });
+    const token = 'fcm-celular-da-maria:' + 'A'.repeat(60);
+    assert.strictEqual((await cel('POST', '/api/dispositivos', { token: 'x' })).status, 400);
+    assert.strictEqual((await anon('POST', '/api/dispositivos', { token })).status, 401);
+    const r = await cel('POST', '/api/dispositivos', { token, plataforma: 'android' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.data.push_ligado, true);
+    assert.strictEqual((await prest('POST', `/api/orders/${oN.id}/status`, { action: 'atrasar', minutes: 30, reason: 'Trânsito' })).status, 200);
+    for (let i = 0; i < 50 && !enviados.length; i++) { await notificador.flush(true); await new Promise((res) => setTimeout(res, 10)); }
+    assert.strictEqual(enviados.length, 1);
+    assert.deepStrictEqual(enviados[0].tokens, [token]);
+    assert.strictEqual(enviados[0].notification.title, 'Aviso de atraso');
+    assert.strictEqual(enviados[0].data.pedido_id, String(oN.id));
+    assert.strictEqual((await cel('POST', '/api/auth/logout')).status, 200);
+    assert.deepStrictEqual(await ms.push.doUsuario(2), []);
+    ms.push.usarEnviador(null);
+  });
   await t('notificações: marcar como lida (só a dona); de outro usuário -> 404', async () => {
     const n = (await cliente('GET', '/api/notificacoes?nao_lidas=1')).data.notificacoes[0];
     assert.strictEqual((await prest('POST', `/api/notificacoes/${n.id}/lida`)).status, 404);

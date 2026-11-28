@@ -71,6 +71,79 @@ const evento = (acao, extra = {}) => ({
     assert.strictEqual((await call('GET', '/usuarios/2/notificacoes/contagem')).data.nao_lidas, 0);
   });
 
+  // ---------- push (pop-up no celular) ----------
+  const TOK = (s) => `tok-${s}-` + 'x'.repeat(40);
+  const enviados = [];
+  let respostaFalsa = null;
+  server.push.usarEnviador(async (msg) => {
+    enviados.push(msg);
+    return respostaFalsa ? respostaFalsa(msg) : { successCount: msg.tokens.length, responses: msg.tokens.map(() => ({ success: true })) };
+  });
+  const esperarPush = async (n) => { for (let i = 0; i < 50 && enviados.length < n; i++) await new Promise((r) => setTimeout(r, 10)); };
+  const pausa = () => new Promise((r) => setTimeout(r, 50));
+
+  await t('dispositivo: token inválido, usuário inválido ou sem chave -> recusa', async () => {
+    assert.strictEqual((await call('POST', '/dispositivos', { usuario_id: 2, token: 'curto' })).status, 400);
+    assert.strictEqual((await call('POST', '/dispositivos', { usuario_id: 2, token: 'tem espaço ' + 'x'.repeat(30) })).status, 400);
+    assert.strictEqual((await call('POST', '/dispositivos', { usuario_id: 0, token: TOK('a') })).status, 400);
+    assert.strictEqual((await call('POST', '/dispositivos', { usuario_id: 2, token: TOK('a') }, {})).status, 401);
+  });
+  await t('push: notificação nova vai para o aparelho de quem recebe (título, texto, pedido e tag)', async () => {
+    assert.strictEqual((await call('POST', '/dispositivos', { usuario_id: 2, token: TOK('maria') })).data.push_ligado, true);
+    await call('POST', '/dispositivos', { usuario_id: 3, token: TOK('carlos') });
+    enviados.length = 0;
+    const ev = evento('confirmado');
+    assert.strictEqual((await call('POST', '/eventos', ev)).data.criadas, 1);
+    await esperarPush(1);
+    assert.strictEqual(enviados.length, 1, 'só o cliente recebe; o prestador fez a ação');
+    const m = enviados[0];
+    assert.deepStrictEqual(m.tokens, [TOK('maria')]);
+    assert.strictEqual(m.notification.title, 'Pedido confirmado');
+    assert.ok(/Carlos Silva/.test(m.notification.body));
+    assert.strictEqual(m.data.pedido_id, '10');
+    assert.strictEqual(m.android.priority, 'high');
+    assert.strictEqual(m.android.notification.channelId, 'biko_pedidos');
+    assert.match(m.android.notification.tag, /^notif-\d+$/);
+    // o mesmo evento reenviado não cria notificação nem manda push de novo
+    assert.strictEqual((await call('POST', '/eventos', ev)).data.criadas, 0);
+    await pausa();
+    assert.strictEqual(enviados.length, 1);
+  });
+  await t('push: aparelho que troca de conta passa a avisar só a conta nova', async () => {
+    await call('POST', '/dispositivos', { usuario_id: 3, token: TOK('maria') }); // Carlos entrou no celular da Maria
+    enviados.length = 0;
+    await call('POST', '/eventos', evento('confirmado'));
+    await pausa();
+    assert.strictEqual(enviados.length, 0, 'Maria não tem mais aparelho');
+    await call('POST', '/eventos', evento('pendente', { ator_id: 2, ator_nome: 'Maria' }));
+    await esperarPush(1);
+    assert.deepStrictEqual(enviados[0].tokens.sort(), [TOK('carlos'), TOK('maria')].sort());
+  });
+  await t('push: token morto (app desinstalado) é apagado; erro do Firebase não derruba a notificação', async () => {
+    respostaFalsa = (msg) => ({ successCount: 0, responses: msg.tokens.map(() => ({ success: false, error: { code: 'messaging/registration-token-not-registered' } })) });
+    enviados.length = 0;
+    await call('POST', '/eventos', evento('pendente', { ator_id: 2 }));
+    await esperarPush(1);
+    await pausa();
+    assert.deepStrictEqual(await server.push.doUsuario(3), []);
+    respostaFalsa = () => { throw new Error('Firebase fora do ar'); };
+    await call('POST', '/dispositivos', { usuario_id: 3, token: TOK('novo') });
+    const r = await call('POST', '/eventos', evento('pendente', { ator_id: 2 }));
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.data.criadas, 1);
+    await pausa();
+    respostaFalsa = null;
+  });
+  await t('dispositivo: remover desliga o push daquele aparelho', async () => {
+    await call('POST', '/dispositivos/remover', { token: TOK('novo') });
+    assert.deepStrictEqual(await server.push.doUsuario(3), []);
+  });
+  await t('push desligado (sem chave do Firebase): nada é enviado e nada quebra', async () => {
+    server.push.usarEnviador(null);
+    assert.strictEqual((await call('POST', '/dispositivos', { usuario_id: 2, token: TOK('z') })).data.push_ligado, false);
+    assert.strictEqual((await call('POST', '/eventos', evento('confirmado'))).data.criadas, 1);
+  });
+
   console.log('\nResultados:\n' + results.join('\n'));
   console.log(`\n${passed}/${results.length} testes passaram`);
   server.close();

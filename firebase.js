@@ -39,4 +39,12 @@ function firestore() {
 
 const modoFirestore = () => { firestore(); return modo; };
 
-module.exports = { firestore, modoFirestore };
+// O firebase-admin já iniciado com a chave (usado pelo push do microsserviço de notificações).
+// null quando não há chave: Firestore em memória ou emulador não enviam push de verdade.
+function firebaseAdmin() {
+  firestore();
+  const admin = require('firebase-admin');
+  return admin.apps.length && admin.app().options.credential ? admin : null;
+}
+
+module.exports = { firestore, modoFirestore, firebaseAdmin };

@@ -28,6 +28,7 @@ class AuthRepository {
     required String password,
     required UserRole role,
     String? phone,
+    ProfessionalCheck? professional,
   }) async {
     final result = await _service.register(
       name: name,
@@ -35,6 +36,7 @@ class AuthRepository {
       password: password,
       role: role,
       phone: phone,
+      professional: professional,
     );
     await _tokens.save(result.token);
     return result.user;

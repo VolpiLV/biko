@@ -4,6 +4,20 @@ import '../models/auth_result.dart';
 import '../models/user_model.dart';
 import '../models/user_role.dart';
 
+/// Verificação do Profissional (só no cadastro de prestador): CPF válido,
+/// maior de 18 anos e aceite dos Termos do Prestador. O servidor confere de novo.
+class ProfessionalCheck {
+  const ProfessionalCheck({required this.cpf, required this.birthDate, required this.terms});
+
+  final String cpf;
+
+  /// "DD/MM/AAAA"
+  final String birthDate;
+  final bool terms;
+
+  Map<String, Object> toJson() => {'cpf': cpf.replaceAll(RegExp(r'\D'), ''), 'birth_date': birthDate, 'terms': terms};
+}
+
 /// Endpoints de autenticação da API do Biko (server.js).
 class AuthService {
   const AuthService(this._api);
@@ -23,6 +37,7 @@ class AuthService {
     required String password,
     required UserRole role,
     String? phone,
+    ProfessionalCheck? professional,
   }) =>
       _api.post(
         '/api/auth/register',
@@ -33,6 +48,7 @@ class AuthService {
           'password': password,
           'role': role.apiValue,
           if (phone != null && phone.isNotEmpty) 'phone': phone,
+          ...?professional?.toJson(),
         },
       );
 

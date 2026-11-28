@@ -9,6 +9,7 @@ import '../../features/auth/viewmodels/register_view_model.dart';
 import '../../features/auth/viewmodels/session_view_model.dart';
 import '../../features/auth/views/forgot_password_screen.dart';
 import '../../features/auth/views/login_screen.dart';
+import '../../features/auth/views/register_pro_screen.dart';
 import '../../features/auth/views/register_screen.dart';
 import '../../features/auth/views/splash_screen.dart';
 import '../../features/home/views/home_screen.dart';
@@ -59,6 +60,16 @@ GoRouter buildRouter(SessionViewModel session) => GoRouter(
                   context.read<SessionViewModel>(),
                 ),
                 child: const RegisterScreen(),
+              ),
+            ),
+            GoRoute(
+              path: AppRoutes.registerProSegment,
+              builder: (context, state) => ChangeNotifierProvider(
+                create: (context) => RegisterViewModel(
+                  context.read<AuthRepository>(),
+                  context.read<SessionViewModel>(),
+                ),
+                child: const RegisterProScreen(),
               ),
             ),
             GoRoute(

@@ -1,0 +1,36 @@
+# Hospedagem no Render (https://render.com) — deixa a API do Biko na internet para o app e o site.
+# No painel do Render: New > Blueprint > escolha este repositório. Ele lê este arquivo sozinho.
+#
+# Um serviço só roda os TRÊS processos (npm run tudo): API + microsserviços de notificações e
+# pagamentos. Os microsserviços continuam presos em 127.0.0.1 (só a API fala com eles).
+#
+# Banco: suba a chave do Firebase como "Secret File" com o nome serviceAccountKey.json
+# (Environment > Secret Files). Sem ela, a API usa o Firestore EM MEMÓRIA e os dados somem
+# sempre que o serviço reinicia ou "dorme" (plano gratuito dorme após 15 min sem uso).
+services:
+  - type: web
+    name: biko-api
+    runtime: node
+    plan: free
+    region: virginia # a mais perto do Brasil entre as do Render
+    branch: microservico-notificacoes
+    buildCommand: npm ci --omit=dev
+    startCommand: npm run tudo
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production # não devolve o código de redefinição de senha na resposta
+      - key: FIREBASE_SERVICE_ACCOUNT
+        value: /etc/secrets/serviceAccountKey.json
+      # Senha da conta admin@biko.com criada no 1º acesso (veja o valor em Environment no painel).
+      # A senha de exemplo do código (Admin@123) está no GitHub, então não pode valer na internet.
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      # Chaves internas entre a API e os microsserviços (geradas pelo Render, ninguém precisa saber).
+      - key: NOTIF_KEY
+        generateValue: true
+      - key: PAG_KEY
+        generateValue: true

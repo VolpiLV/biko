@@ -1,14 +1,17 @@
 import 'dart:async';
 
 import '../../../core/errors/app_exception.dart';
+import '../../../core/notifications/system_notifications.dart';
 import '../../../core/viewmodel/base_view_model.dart';
 import '../../../data/models/notification_model.dart';
 import '../../../data/remote/notification_service.dart';
 
 /// Sino de notificações: contador de não lidas (atualiza sozinho) e o histórico.
 /// Se o microsserviço estiver fora do ar, o sino só fica sem número; o resto do app segue normal.
+/// Com [notifier], o que chegar de novo também aparece como pop-up do celular.
 class NotificationsViewModel extends BaseViewModel {
-  NotificationsViewModel(this._service, {Duration pollEvery = const Duration(seconds: 20)}) {
+  NotificationsViewModel(this._service, {Duration pollEvery = const Duration(seconds: 20), SystemNotifier? notifier})
+    : _notifier = notifier {
     unawaited(refreshCount());
     if (pollEvery > Duration.zero) {
       _timer = Timer.periodic(pollEvery, (_) => refreshCount());
@@ -16,7 +19,17 @@ class NotificationsViewModel extends BaseViewModel {
   }
 
   final NotificationService _service;
+  final SystemNotifier? _notifier;
   Timer? _timer;
+
+  /// Maior id já visto. null = ainda não consultou (a 1ª consulta só marca o ponto de partida,
+  /// para não estourar pop-ups de coisas antigas ao abrir o app).
+  int? _lastSeenId;
+
+  final _arrivals = StreamController<List<AppNotification>>.broadcast();
+
+  /// Chegaram notificações novas (ex.: "Novo pedido"): as telas recarregam o que mostram.
+  Stream<List<AppNotification>> get arrivals => _arrivals.stream;
 
   int _unread = 0;
   List<AppNotification> _items = const [];
@@ -30,11 +43,35 @@ class NotificationsViewModel extends BaseViewModel {
 
   Future<void> refreshCount() async {
     try {
-      _unread = await _service.unreadCount();
+      final notifier = _notifier;
+      if (notifier == null) {
+        _unread = await _service.unreadCount();
+      } else {
+        // Com pop-ups: busca as últimas para saber QUAIS são novas (não só quantas).
+        final page = await _service.list(limit: 10);
+        _unread = page.unread;
+        final fresh = _takeNew(page.items);
+        for (final n in fresh) {
+          unawaited(notifier.show(n));
+        }
+        if (fresh.isNotEmpty) _arrivals.add(fresh);
+      }
     } on AppException {
       _unread = 0;
     }
     notify();
+  }
+
+  /// Não lidas com id maior que o último visto, da mais antiga para a mais nova.
+  List<AppNotification> _takeNew(List<AppNotification> items) {
+    final last = _lastSeenId;
+    final maxId = items.fold<int>(last ?? 0, (m, n) => n.id > m ? n.id : m);
+    _lastSeenId = maxId;
+    if (last == null) return const [];
+    return [
+      for (final n in items.reversed)
+        if (!n.read && n.id > last) n,
+    ];
   }
 
   /// Carrega o histórico (abre o sino).
@@ -46,6 +83,7 @@ class NotificationsViewModel extends BaseViewModel {
       final page = await _service.list();
       _items = page.items;
       _unread = page.unread;
+      _takeNew(page.items); // já estão na tela: não viram pop-up depois
     } on AppException catch (e) {
       _error = e.message;
     }
@@ -63,6 +101,17 @@ class NotificationsViewModel extends BaseViewModel {
       notify();
     } on AppException {
       // a marcação local já resolve para a tela; na próxima atualização o número se acerta
+    }
+  }
+
+  /// Tocou no pop-up do celular: aquela notificação foi vista.
+  Future<void> markReadById(int id) async {
+    try {
+      _unread = await _service.markRead(id);
+      _items = [for (final i in _items) i.id == id ? i.copyWith(read: true) : i];
+      notify();
+    } on AppException {
+      // de outra conta ou já apagada: só segue
     }
   }
 
@@ -84,6 +133,7 @@ class NotificationsViewModel extends BaseViewModel {
   @override
   void dispose() {
     _timer?.cancel();
+    unawaited(_arrivals.close());
     super.dispose();
   }
 }

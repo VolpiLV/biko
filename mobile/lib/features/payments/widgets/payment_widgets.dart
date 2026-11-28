@@ -77,13 +77,21 @@ class ChargePill extends StatelessWidget {
 
 /// "QR Code" de enfeite: desenho gerado a partir do código Pix (não é um QR de verdade).
 class FakeQrCode extends StatelessWidget {
-  const FakeQrCode({super.key, required this.data, this.size = 190});
+  const FakeQrCode({super.key, required this.data, this.size = 190, this.dark = false});
 
   final String data;
   final double size;
 
+  /// Módulos brancos, para desenhar sobre o fundo escuro do Figma.
+  final bool dark;
+
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => dark
+      ? Semantics(
+          label: 'QR Code Pix (demonstração)',
+          child: CustomPaint(size: Size.square(size), painter: _QrPainter(data, color: Colors.white)),
+        )
+      : Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: Colors.white,
@@ -98,15 +106,16 @@ class FakeQrCode extends StatelessWidget {
 }
 
 class _QrPainter extends CustomPainter {
-  _QrPainter(this.data);
+  _QrPainter(this.data, {this.color = const Color(0xFF14213D)});
 
   final String data;
+  final Color color;
   static const _n = 25;
 
   @override
   void paint(Canvas canvas, Size size) {
     final cell = size.width / _n;
-    final paint = Paint()..color = const Color(0xFF14213D);
+    final paint = Paint()..color = color;
     // Gerador "aleatório" a partir do texto (Park–Miller). As contas ficam abaixo de 2^53,
     // então o desenho sai igual no celular e no Chrome.
     const m = 2147483647;

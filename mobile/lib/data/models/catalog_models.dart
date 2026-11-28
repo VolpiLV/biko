@@ -30,6 +30,28 @@ class CategoryModel {
       };
 }
 
+/// Visual de cada categoria nas telas do Figma: emoji, nome curto do chip e fundo do ícone.
+class CategoryStyle {
+  const CategoryStyle(this.name, this.chip, this.emoji, this.background);
+
+  final String name;
+  final String chip;
+  final String emoji;
+  final Color background;
+
+  static const List<CategoryStyle> all = [
+    CategoryStyle('Telhado & Reparador', 'Telhados', '🏠', Color(0xFFFFF6DD)),
+    CategoryStyle('Encanador', 'Hidráulica', '🔧', Color(0xFFE7F1FF)),
+    CategoryStyle('Eletricista', 'Elétrica', '⚡', Color(0xFFFFF6DD)),
+    CategoryStyle('Pintor', 'Pintura', '🎨', Color(0xFFF3E8FF)),
+    CategoryStyle('Limpeza', 'Limpeza', '🧹', Color(0xFFE3F7EC)),
+    CategoryStyle('Jardinagem', 'Jardim', '🌿', Color(0xFFE3F7EC)),
+  ];
+
+  static String emojiOf(String category) =>
+      all.where((c) => c.name == category).map((c) => c.emoji).firstOrNull ?? '🛠️';
+}
+
 /// Serviço oferecido por um prestador (`serviceView` no server.js).
 class ServiceModel {
   const ServiceModel({
@@ -44,7 +66,33 @@ class ServiceModel {
     required this.active,
     this.providerPhotoUrl,
     this.realStats,
+    this.providerSpecialty,
+    this.providerVerified = false,
+    this.providerRating,
+    this.providerReviews = 0,
   });
+
+  /// Dados do prestador que aparecem no cartão da busca.
+  final String? providerSpecialty;
+  final bool providerVerified;
+
+  /// Média das avaliações (null = ainda sem avaliação, "Novo no Biko").
+  final double? providerRating;
+  final int providerReviews;
+
+  /// Mesmo serviço com outro prestador (quando vem do perfil público, que não repete o nome).
+  ServiceModel withProvider({required int id, required String name, String? photoUrl}) => ServiceModel(
+        id: this.id,
+        providerId: id,
+        providerName: name,
+        providerPhotoUrl: photoUrl,
+        title: title,
+        category: category,
+        description: description,
+        price: price,
+        durationMin: durationMin,
+        active: active,
+      );
 
   final int id;
   final int providerId;
@@ -74,6 +122,23 @@ class ServiceModel {
         realStats: json['real_stats'] is Map<String, dynamic>
             ? ServiceRealStats.fromJson(json['real_stats'] as Map<String, dynamic>)
             : null,
+        providerSpecialty: readStringOrNull(json, 'provider_specialty'),
+        providerVerified: json['provider_verified'] == true,
+        providerRating: readNumOrNull(json, 'provider_rating'),
+        providerReviews: readNumOrNull(json, 'provider_reviews')?.round() ?? 0,
+      );
+
+  /// Serviço como vem no perfil público do prestador (sem os campos do prestador).
+  factory ServiceModel.fromProfile(Map<String, dynamic> json) => ServiceModel(
+        id: readInt(json, 'id'),
+        providerId: 0,
+        providerName: '',
+        title: readString(json, 'title'),
+        category: readString(json, 'category'),
+        description: '',
+        price: readNum(json, 'price'),
+        durationMin: readInt(json, 'duration_min'),
+        active: true,
       );
 }
 
@@ -132,7 +197,8 @@ enum SearchSort {
   relevance('', 'Mais relevantes'),
   priceAsc('preco_asc', 'Menor preço'),
   priceDesc('preco_desc', 'Maior preço'),
-  name('nome', 'Nome (A–Z)');
+  name('nome', 'Nome (A–Z)'),
+  rating('nota', 'Melhor nota');
 
   const SearchSort(this.apiValue, this.label);
 

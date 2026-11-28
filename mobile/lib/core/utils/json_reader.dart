@@ -57,6 +57,22 @@ String? readStringOrNull(Map<String, dynamic> json, String key) {
   throw FormatException('Campo "$key" deveria ser um texto.');
 }
 
+/// Lista de textos (ex.: categorias do prestador). null quando o campo não vem.
+List<String>? readStringListOrNull(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value == null) return null;
+  if (value is! List) throw FormatException('Campo "$key" deveria ser uma lista.');
+  return [for (final v in value) if (v is String) v];
+}
+
+/// Data em milissegundos (epoch) ou texto "AAAA-MM-DD HH:MM:SS" (UTC). null se não vier.
+DateTime? readDateFlexibleOrNull(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value == null) return null;
+  if (value is num) return DateTime.fromMillisecondsSinceEpoch(value.round());
+  return readServerDateOrNull(json, key);
+}
+
 /// Aceita bool (API) ou 0/1 (SQLite).
 bool readBool(Map<String, dynamic> json, String key) {
   final value = json[key];

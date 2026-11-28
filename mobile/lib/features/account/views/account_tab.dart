@@ -3,24 +3,40 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_tokens.dart';
+import '../../../core/theme/biko_colors.dart';
 import '../../../core/utils/phone_input_formatter.dart';
 import '../../../core/utils/validators.dart';
 import '../../../data/models/user_model.dart';
+import '../../../data/models/user_role.dart';
 import '../../../data/remote/profile_service.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../../shared/widgets/app_snackbar.dart';
 import '../../../shared/widgets/app_text_field.dart';
 import '../../../shared/widgets/app_ui.dart';
+import '../../../shared/widgets/biko_ui.dart';
 import '../../../shared/widgets/confirm_dialog.dart';
-import '../../../shared/widgets/role_badge.dart';
-import '../../../shared/widgets/user_avatar.dart';
 import '../../auth/viewmodels/session_view_model.dart';
+import '../../home/app_navigator.dart';
+import '../../payments/views/sales_tab.dart';
 import '../../settings/viewmodels/theme_view_model.dart';
 import '../viewmodels/account_view_models.dart';
 
-/// Aba "Conta": foto, meus dados, alterar senha, tema e sair.
+/// "Minha Conta" em tela própria (cliente abre pelo topo do Início; prestador pela engrenagem do Perfil).
+class AccountScreen extends StatelessWidget {
+  const AccountScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: bikoAppBar(context, 'Minha Conta'),
+        body: const AccountTab(withTitle: false),
+      );
+}
+
+/// "Minha Conta": foto, meus dados, alterar senha, tema e sair.
 class AccountTab extends StatelessWidget {
-  const AccountTab({super.key});
+  const AccountTab({super.key, this.withTitle = true});
+
+  final bool withTitle;
 
   @override
   Widget build(BuildContext context) {
@@ -35,15 +51,40 @@ class AccountTab extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ProfileFormViewModel(service, session)),
         ChangeNotifierProvider(create: (_) => PasswordFormViewModel(service)),
       ],
-      child: TabPage(
+      child: BikoPage(
         children: [
+          if (withTitle) const PageTitle('Minha Conta') else const SizedBox(height: 10),
           _PhotoSection(user: user),
-          const SizedBox(height: AppSpacing.md),
           _Section(title: 'Meus dados', child: _ProfileForm(user: user)),
           const _Section(title: 'Alterar senha', child: _PasswordForm()),
           const _Section(title: 'Aparência', child: _ThemePicker()),
-          const SizedBox(height: AppSpacing.sm),
-          const _LogoutButton(),
+          if (user.role == UserRole.cliente)
+            BikoCard(
+              onTap: () => pushScreen<void>(context, const PaymentsScreen()),
+              child: Row(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(color: context.bikoColors.greenSoft, borderRadius: BorderRadius.circular(14)),
+                    child: const Text('🧾', style: TextStyle(fontSize: 22)),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Meus pagamentos', style: TextStyle(fontWeight: FontWeight.w700, color: context.bikoColors.ink)),
+                        Text('Comprovantes e estornos', style: TextStyle(color: context.bikoColors.muted, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: context.bikoColors.muted),
+                ],
+              ),
+            ),
+          const Padding(padding: EdgeInsets.symmetric(horizontal: AppSpacing.page), child: _LogoutButton()),
         ],
       ),
     );
@@ -57,18 +98,10 @@ class _Section extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Card(
-        margin: const EdgeInsets.only(bottom: AppSpacing.md),
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: AppSpacing.md),
-              child,
-            ],
-          ),
+  Widget build(BuildContext context) => BikoCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [CardTitle(title), child],
         ),
       );
 }
@@ -105,47 +138,46 @@ class _PhotoSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<PhotoViewModel>();
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        Stack(
-          alignment: Alignment.center,
-          children: [
-            UserAvatar(user: user, radius: 44),
-            if (vm.busy) const CircularProgressIndicator(),
-          ],
-        ),
-        const SizedBox(width: AppSpacing.md),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    final c = context.bikoColors;
+    final tone = switch (user.role) {
+      UserRole.prestador => TagTone.orange,
+      UserRole.admin => TagTone.purple,
+      UserRole.cliente => TagTone.blue,
+    };
+    return BikoCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 22),
+      child: Column(
+        children: [
+          Stack(
+            alignment: Alignment.center,
             children: [
-              Text(user.name, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: AppSpacing.xs),
-              RoleBadge(role: user.role),
-              const SizedBox(height: AppSpacing.sm),
-              Wrap(
-                spacing: AppSpacing.sm,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 40)),
-                    onPressed: vm.busy ? null : () => _pick(context),
-                    icon: const Icon(Icons.photo_camera_outlined, size: 18),
-                    label: Text(user.photoUrl == null ? 'Adicionar foto' : 'Trocar foto'),
-                  ),
-                  if (user.photoUrl != null)
-                    TextButton(
-                      onPressed: vm.busy ? null : () => _remove(context),
-                      style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
-                      child: const Text('Remover'),
-                    ),
-                ],
-              ),
+              BikoAvatar(name: user.name, photoUrl: user.photoUrl, size: 92, ring: true),
+              if (vm.busy) const CircularProgressIndicator(),
             ],
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          Text(user.name, textAlign: TextAlign.center, style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: c.ink)),
+          Text(user.email, style: TextStyle(color: c.muted, fontSize: 13.5)),
+          const SizedBox(height: 10),
+          Tag(user.role.label, tone: tone),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 14,
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              BikoButton(
+                label: user.photoUrl == null ? 'Adicionar foto' : 'Trocar foto',
+                style: BikoButtonStyle.light,
+                small: true,
+                expand: false,
+                onPressed: vm.busy ? null : () => _pick(context),
+              ),
+              if (user.photoUrl != null) LinkText('Remover', color: c.danger, onTap: vm.busy ? null : () => _remove(context)),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -376,13 +408,11 @@ class _LogoutButton extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return FilledButton.icon(
-      style: FilledButton.styleFrom(backgroundColor: scheme.error, foregroundColor: scheme.onError),
-      onPressed: () => _confirm(context),
-      icon: const Icon(Icons.logout),
-      label: const Text('Sair da conta'),
-    );
-  }
+  Widget build(BuildContext context) => BikoButton(
+        label: 'Sair da conta',
+        icon: Icons.logout,
+        style: BikoButtonStyle.outline,
+        foreground: context.bikoColors.danger,
+        onPressed: () => _confirm(context),
+      );
 }

@@ -1,0 +1,164 @@
+HISTORICO DE PENSAMENTOS - APP FLUTTER NAS TELAS DO FIGMA
+=========================================================
+
+-------------------------------------------------------------------------
+O QUE FOI PEDIDO
+-------------------------------------------------------------------------
+
+  Transformar a aplicacao web em aplicativo mobile (Android Studio,
+  Flutter e VS Code na maquina).
+
+-------------------------------------------------------------------------
+RACIOCINIO
+-------------------------------------------------------------------------
+
+  - Ja existia um app Flutter em mobile/ (MVVM, login com token, pedidos,
+    pagamentos, notificacoes). Ele compilava e os 56 testes passavam, mas
+    estava no visual antigo e sem as telas novas do Figma que o site tem.
+  - Opcoes consideradas: atualizar o app existente, fazer um app do zero
+    ou so empacotar o site num WebView. Escolhido (pelo Leonardo):
+    atualizar o app. Mantem o que ja funciona e vira um app de verdade.
+  - O app continua falando so com a API principal (porta 3000). Nenhuma
+    regra de negocio nova no app: as regras ficam no server.js; o app so
+    repete as validacoes para mostrar o erro antes de enviar (CPF, idade,
+    e-mail ou telefone).
+
+-------------------------------------------------------------------------
+O QUE MUDOU NO APP
+-------------------------------------------------------------------------
+
+  Visual
+  - Fonte Poppins embutida (assets/fonts, licenca OFL), azul #0A84FF,
+    laranja #FF9500, cartoes brancos arredondados, barra de baixo.
+  - Cores em core/theme (claro e escuro). Pecas repetidas em
+    shared/widgets/biko_ui.dart.
+
+  Abas por perfil (iguais ao site)
+  - Cliente: Inicio, Buscar, Conversas, Agenda.
+  - Prestador: Inicio, Agenda, Conversas, Ganhos, Perfil.
+  - Admin: Inicio, Usuarios, Pedidos, Vendas, Conta.
+
+  Telas novas
+  - Login com e-mail ou telefone, modo "Area do Prestador".
+  - Cadastro do profissional em 2 passos com verificacao do CPF, idade
+    (18+) e termos.
+  - Inicio do cliente (busca, servico rapido, avisos, categorias).
+  - Busca com nota, verificado, "mais bem avaliado", Conversar/Agendar.
+  - Perfil publico do prestador (servicos, portfolio, avaliacoes).
+  - Escolha de data (14 dias) e horario, Pagamento Seguro com Taxa de
+    Protecao (R$ 5,00), Pedido Confirmado.
+  - Agenda do cliente, detalhe do pedido com avaliacao (estrelas).
+  - Conversas e chat (atualiza a cada 4 s).
+  - Prestador: Online/Offline, ganhos da semana, solicitacoes,
+    Detalhes da Solicitacao, Servico em Andamento (linha do tempo,
+    Ver rota no Google Maps, Ligar), Sua Agenda com horarios livres,
+    Ganhos e Carteira com saque Pix simulado, Perfil Profissional
+    (categorias, valor da visita, portfolio com fotos).
+
+  Android
+  - AndroidManifest: permissao de INTERNET, usesCleartextTraffic (API
+    local em http) e consultas do url_launcher (mapa e discador).
+
+  Testes
+  - 68 testes do Flutter passam (56 que ja existiam + 12 novos: CPF,
+    idade, login por telefone, datas, modelos de conversa/perfil/
+    carteira, taxa de protecao e horarios livres da agenda).
+  - flutter analyze sem erros; so os avisos informativos de
+    "material.dart deprecated" (migracao para material_ui fica depois).
+
+-------------------------------------------------------------------------
+OBSERVACOES
+-------------------------------------------------------------------------
+
+  - O Flutter desta maquina fica em OneDrive\Documentos\flutter e nao
+    esta no PATH do terminal (o VS Code acha pelo dart.flutterSdkPath).
+  - Emulador Android: 10.0.2.2:3000 e o "localhost do computador".
+    Celular fisico: flutter run --dart-define=API_URL=http://IP-DO-PC:3000
+
+-------------------------------------------------------------------------
+VOLTAR DO CELULAR (botao ou gesto) E HOSPEDAGEM
+-------------------------------------------------------------------------
+
+  Problema: trocar de aba e apertar "voltar" fechava o app (as abas nao
+  tinham historico; o Android achava que nao havia tela para tras).
+
+  Solucao (mobile/lib/features/home/widgets/tab_back_handler.dart):
+  - HomeNavigation guarda as abas visitadas (sem repetir, max. 20).
+  - Voltar = aba anterior; sem historico, vai ao Inicio.
+  - No Inicio: 1o toque mostra "Toque em voltar de novo para sair";
+    so o 2o toque (em ate 2 s) fecha o app.
+  - Telas abertas por cima (pedido, chat, perfil) e folhas de baixo
+    continuam fechando primeiro, pelo Navigator.
+  - Testado: 9 testes novos (77 no total) e no emulador Android 17 com
+    navegacao por gestos (arrastar da borda) e tecla BACK (3 botoes).
+
+  Hospedagem (render.yaml na raiz):
+  - Render, plano gratuito, um servico rodando "npm run tudo" (API +
+    os dois microsservicos presos em 127.0.0.1).
+  - NODE_ENV=production: o codigo de redefinicao de senha nao volta
+    mais na resposta.
+  - ADMIN_PASSWORD: a senha do admin@biko.com na internet e gerada pelo
+    Render. A senha de exemplo (Admin@123) esta no GitHub e so vale no
+    computador.
+  - Banco: chave do Firebase como Secret File (serviceAccountKey.json).
+    Sem ela os dados somem quando o servidor reinicia ou "dorme".
+  - App: espera ate 30 s para conectar e 60 s pela resposta, porque o
+    plano gratuito leva ~50 s para acordar.
+
+-------------------------------------------------------------------------
+NOTIFICACOES EM POP-UP NO CELULAR
+-------------------------------------------------------------------------
+
+  Pedido: as notificacoes so apareciam dentro do app (sino). Agora
+  aparecem como pop-up do Android (no topo da tela e na barra de
+  notificacoes).
+
+  Duas camadas:
+  1. App aberto: o sino ja consultava o servidor a cada 20 s; o que chega
+     de novo vira pop-up (flutter_local_notifications, canal
+     "biko_pedidos", prioridade alta). Funciona sem configurar nada.
+     - Ao abrir o app, as antigas NAO viram pop-up (so o numero do sino).
+     - Tocar no pop-up abre o pedido e marca a notificacao como lida.
+     - Chegou notificacao nova: a Inicio e a agenda recarregam sozinhas.
+  2. App fechado/minimizado: push do Firebase Cloud Messaging (FCM).
+     O Android 14+ congela apps em segundo plano, entao a consulta de
+     20 s para; so o push do Google acorda o celular.
+     - Microsservico de notificacoes (notificacoes/push.js) guarda os
+       aparelhos (colecao notif_dispositivos) e manda o push quando cria
+       a notificacao. Token morto e apagado; erro no Firebase nao
+       derruba a notificacao.
+     - API: POST /api/dispositivos (app manda o token do aparelho);
+       logout desliga o push daquele aparelho.
+     - Liga sozinho quando o servidor tem a chave do Firebase e o app e
+       gerado com as 4 chaves (FIREBASE_API_KEY, FIREBASE_APP_ID,
+       FIREBASE_SENDER_ID, FIREBASE_PROJECT_ID via --dart-define).
+
+  Android: permissao POST_NOTIFICATIONS (o app pergunta na 1a vez),
+  icone de sino (ic_stat_biko), compileSdk 37 (exigido pelo plugin).
+
+  Testado:
+  - 16 testes do microsservico (6 novos de push) e 129 da API (1 novo:
+    registra aparelho, recebe push, logout desliga).
+  - 88 testes do app (11 novos: quais viram pop-up, toque, payload).
+  - Emulador Android 17: permissao pedida, pop-up "Novo pedido" ~8 s
+    depois do pedido, toque abriu "Detalhes da Solicitacao" do pedido
+    certo e marcou como lida, Inicio atualizou para 5 solicitacoes.
+  - Com o app minimizado o pop-up NAO chega (esperado sem Firebase);
+    chega ~1 s depois de voltar ao app.
+  - Push com o app fechado (FCM) NAO foi testado de ponta a ponta: falta
+    o projeto Firebase. A parte do servidor foi testada com um envio
+    falso.
+
+-------------------------------------------------------------------------
+FUNCIONALIDADES FUTURAS
+-------------------------------------------------------------------------
+
+  - Entrar com o Google (pedido pelo Leonardo, para depois). Caminho
+    previsto: Firebase Authentication com o provedor Google no app
+    (pacotes google_sign_in + firebase_auth) e uma rota nova na API
+    (POST /api/auth/google) que confere o token do Google com o
+    firebase-admin e cria/entra na conta pelo e-mail. Precisa do mesmo
+    projeto Firebase do push e da impressao SHA-1 da chave que assina o
+    APK cadastrada no console.
+  - Icone proprio do app (hoje e o logo padrao do Flutter).
+  - Pop-up para mensagens novas do chat (hoje so pedidos/pagamentos).

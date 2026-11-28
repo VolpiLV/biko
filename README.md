@@ -168,7 +168,7 @@ Mudanças de regra que vieram das telas:
 Rotas novas: `/api/conversas` (GET, `/:id` GET/POST), `/api/orders/:id/avaliacao` (POST), `/api/prestadores/:id` (GET), `/api/me/profissional` (GET/PATCH), `/api/me/portfolio` (POST, `/:id` DELETE), `/api/portfolio/:id/foto` (GET), `/api/carteira` (GET), `/api/carteira/saque` (POST), `/api/auth/verificar-profissional` (POST).
 Coleções novas no Firestore: `messages`, `reviews`, `portfolio`, `withdrawals`.
 
-O app Flutter (pasta `mobile/`) ainda está no visual antigo.
+O app Flutter (pasta `mobile/`) também segue essas telas e tem as mesmas funções (conversas, avaliação, perfil profissional, portfólio, carteira, Online/Offline e cadastro com verificação do CPF). Como rodar no emulador ou no celular: [`mobile/README.md`](mobile/README.md).
 
 ## Estrutura
 

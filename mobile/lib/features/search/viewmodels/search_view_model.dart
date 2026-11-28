@@ -67,6 +67,13 @@ class SearchViewModel extends PagedListViewModel<ServiceModel> {
 
   void clearFilters() => _apply(const SearchFilters());
 
+  /// Atalho da tela inicial: começa uma busca nova (texto ou categoria).
+  void startWith({String query = '', String category = ''}) =>
+      _apply(SearchFilters(query: query.trim(), category: category));
+
+  /// Liga/desliga uma ordenação (chips "Menor Preço" e "Melhor Nota").
+  void toggleSort(SearchSort sort) => setSort(_filters.sort == sort ? SearchSort.relevance : sort);
+
   @override
   Future<Paged<ServiceModel>> fetchPage(int offset) => _service.search(_filters, offset: offset);
 

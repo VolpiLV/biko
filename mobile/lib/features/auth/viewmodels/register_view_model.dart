@@ -1,6 +1,7 @@
 import '../../../core/errors/app_exception.dart';
 import '../../../core/viewmodel/base_view_model.dart';
 import '../../../data/models/user_role.dart';
+import '../../../data/remote/auth_service.dart';
 import '../../../data/repositories/auth_repository.dart';
 import 'session_view_model.dart';
 
@@ -12,7 +13,11 @@ class RegisterInput {
     required this.phone,
     required this.password,
     required this.role,
+    this.professional,
   });
+
+  /// Só no cadastro do profissional (CPF, nascimento e termos).
+  final ProfessionalCheck? professional;
 
   final String name;
   final String email;
@@ -57,6 +62,7 @@ class RegisterViewModel extends BaseViewModel {
         phone: input.phone.trim(),
         password: input.password,
         role: input.role,
+        professional: input.professional,
       );
       _session.signIn(user);
       return true;

@@ -10,13 +10,21 @@ class OrderService {
 
   final ApiClient _api;
 
-  Future<Paged<OrderModel>> list({OrderStatus? status, int offset = 0}) => _api.get(
+  Future<Paged<OrderModel>> list({OrderStatus? status, int offset = 0, int? limit}) => _api.get(
         '/api/orders',
         (json) => Paged.fromJson(json, 'orders', OrderModel.fromJson),
         query: {
           if (status != null) 'status': status.apiValue,
           if (offset > 0) 'offset': offset,
+          'limit': ?limit,
         },
+      );
+
+  /// Avaliação do cliente depois do serviço concluído (1 a 5 estrelas).
+  Future<void> review(int id, {required int stars, String comment = ''}) => _api.post<void>(
+        '/api/orders/$id/avaliacao',
+        (_) {},
+        body: {'nota': stars, 'comentario': comment.trim()},
       );
 
   /// Pedido com o histórico de status.

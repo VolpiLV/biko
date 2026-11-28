@@ -8,12 +8,22 @@ class ProviderPanel {
     required this.monthEarnings,
     required this.upcoming,
     this.rating,
+    this.pending = const [],
+    this.weekEarnings = 0,
+    this.weekServices = 0,
   });
 
   final int newOrders;
   final double? rating;
   final double monthEarnings;
+
+  /// Confirmados (próximos atendimentos).
   final List<OrderModel> upcoming;
+
+  /// Solicitações novas, esperando Aceitar/Recusar.
+  final List<OrderModel> pending;
+  final double weekEarnings;
+  final int weekServices;
 
   factory ProviderPanel.fromJson(Map<String, dynamic> json) {
     final r = readMap(json, 'resumo');
@@ -22,6 +32,9 @@ class ProviderPanel {
       rating: readNumOrNull(r, 'avaliacao'),
       monthEarnings: readNum(r, 'ganhosMes'),
       upcoming: readList(json, 'proximos', OrderModel.fromJson),
+      pending: json['pendentes'] is List ? readList(json, 'pendentes', OrderModel.fromJson) : const [],
+      weekEarnings: readNumOrNull(r, 'ganhosSemana') ?? 0,
+      weekServices: readNumOrNull(r, 'servicosSemana')?.round() ?? 0,
     );
   }
 }

@@ -13,13 +13,22 @@ class PaymentViewModel extends FormViewModel {
   final PaymentService _service;
   final OrderModel order;
 
-  PaymentMethod _method = PaymentMethod.pix;
+  // Como no site: nenhuma forma vem escolhida; o QR do Pix só aparece depois de tocar em Pix.
+  PaymentMethod? _method;
   Charge? _pix;
   Charge? _approved;
   String? _cardDeclined;
   bool _resuming = false;
 
-  PaymentMethod get method => _method;
+  PaymentMethod? get method => _method;
+
+  /// Tocar na forma já aberta fecha ela de novo.
+  void toggleMethod(PaymentMethod m) {
+    _method = _method == m ? null : m;
+    _cardDeclined = null;
+    clearErrors();
+    if (_method == PaymentMethod.pix && _pix == null) generatePix();
+  }
 
   /// Pix gerado e aguardando pagamento.
   Charge? get pix => _pix;
@@ -54,6 +63,19 @@ class PaymentViewModel extends FormViewModel {
   }
 
   Future<void> generatePix() async {
+    // Reaproveita um Pix que já esteja aguardando; senão gera um novo.
+    if (order.awaitingPix) {
+      try {
+        final c = await _service.ofOrder(order.id);
+        if (c != null && c.status == ChargeStatus.aguardando && c.pixCode != null) {
+          _pix = c;
+          notify();
+          return;
+        }
+      } on AppException {
+        // gera um novo abaixo
+      }
+    }
     final c = await submit(() => _service.payWithPix(order.id));
     if (c == null) return;
     _pix = c;

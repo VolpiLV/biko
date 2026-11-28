@@ -23,4 +23,12 @@ class NotificationService {
       _api.post('/api/notificacoes/$id/lida', (json) => readInt(json, 'nao_lidas'));
 
   Future<void> markAllRead() => _api.post<void>('/api/notificacoes/lidas', (_) {});
+
+  /// Registra o token deste aparelho para receber push com o app fechado.
+  /// Devolve se o servidor está com o push ligado (tem a chave do Firebase).
+  Future<bool> registerDevice(String token) => _api.post(
+        '/api/dispositivos',
+        (json) => readBool(json, 'push_ligado'),
+        body: {'token': token, 'plataforma': 'android'},
+      );
 }

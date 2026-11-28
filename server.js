@@ -275,6 +275,9 @@ route('POST', '/api/auth/login', {}, async (ctx) => {
 });
 
 route('POST', '/api/auth/logout', { auth: true }, async (ctx) => {
+  // Este aparelho para de receber push desta conta (se o serviço estiver fora, segue o logout).
+  const s = await T.sessions.get(ctx.token);
+  if (s?.push_token) await notificador.chamar('POST', '/dispositivos/remover', { token: s.push_token }).catch(() => {});
   await T.sessions.remove(ctx.token);
   ctx.headers['Set-Cookie'] = clearCookie();
   return [200, { ok: true }];
@@ -989,6 +992,16 @@ route('GET', '/api/notificacoes', { auth: true }, async (ctx) => {
 route('GET', '/api/notificacoes/contagem', { auth: true }, async (ctx) => {
   await notificador.flush().catch(() => {});
   return [200, await notif('GET', `${notifBase(ctx)}/contagem`)];
+});
+// O app avisa o token do aparelho (Firebase Cloud Messaging) para receber pop-ups com o app fechado.
+// Fica guardado na sessão para o logout poder desligar o push deste aparelho.
+route('POST', '/api/dispositivos', { auth: true }, async (ctx) => {
+  const token = String(ctx.body.token || '');
+  if (!/^[\w:.\-]{20,4096}$/.test(token)) fail(400, 'Token do aparelho inválido.');
+  const plataforma = ['android', 'ios', 'web'].includes(ctx.body.plataforma) ? ctx.body.plataforma : 'android';
+  const r = await notif('POST', '/dispositivos', { usuario_id: ctx.user.id, token, plataforma });
+  await T.sessions.update(ctx.token, { push_token: token });
+  return [200, { ok: true, push_ligado: !!r.push_ligado }];
 });
 route('POST', '/api/notificacoes/lidas', { auth: true }, async (ctx) => [200, await notif('POST', `${notifBase(ctx)}/lidas`, {})]);
 route('POST', '/api/notificacoes/:id/lida', { auth: true }, async (ctx) => {

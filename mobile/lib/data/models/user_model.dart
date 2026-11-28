@@ -13,6 +13,11 @@ class UserModel {
     this.phone,
     this.createdAt,
     this.photoUrl,
+    this.specialty,
+    this.visitPrice,
+    this.online = true,
+    this.categories,
+    this.verified = false,
   });
 
   final int id;
@@ -26,6 +31,22 @@ class UserModel {
   /// Caminho relativo na API (ex.: /api/photo/3?v=2). Nulo quando não há foto.
   final String? photoUrl;
 
+  // ---- perfil profissional (só vem para prestador) ----
+  /// Ex.: "Especialista em Telhados e Coberturas".
+  final String? specialty;
+
+  /// Valor base da visita técnica.
+  final double? visitPrice;
+
+  /// Offline: os serviços dele somem da busca.
+  final bool online;
+
+  /// Categorias ligadas no perfil (null = todas).
+  final List<String>? categories;
+
+  /// CPF verificado no cadastro do profissional.
+  final bool verified;
+
   factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
         id: readInt(json, 'id'),
         name: readString(json, 'name'),
@@ -35,6 +56,11 @@ class UserModel {
         active: readBool(json, 'active'),
         createdAt: readServerDateOrNull(json, 'created_at'),
         photoUrl: readStringOrNull(json, 'photo_url'),
+        specialty: readStringOrNull(json, 'specialty'),
+        visitPrice: readNumOrNull(json, 'visit_price'),
+        online: json['online'] != false,
+        categories: readStringListOrNull(json, 'categories'),
+        verified: json['verified'] == true,
       );
 
   Map<String, dynamic> toJson() => {

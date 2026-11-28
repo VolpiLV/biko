@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/theme/app_tokens.dart';
+import '../../../core/theme/biko_colors.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../data/models/catalog_models.dart';
 import '../../../data/remote/catalog_service.dart';
 import '../../../shared/widgets/app_ui.dart';
+import '../../../shared/widgets/biko_ui.dart';
 import '../../../shared/widgets/state_views.dart';
 import '../viewmodels/my_services_view_model.dart';
 
@@ -45,66 +47,74 @@ class _ServicesTabState extends State<ServicesTab> {
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<MyServicesViewModel>();
-    final theme = Theme.of(context);
-    return TabPage(
+    final c = context.bikoColors;
+    return BikoPage(
       onRefresh: vm.load,
       children: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: FilledButton.icon(
-            onPressed: vm.loaded ? () => _openForm() : null,
-            icon: const Icon(Icons.add),
-            label: const Text('Novo serviço'),
-          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
+          child: BikoButton(label: 'Novo serviço', icon: Icons.add, onPressed: vm.loaded ? () => _openForm() : null),
         ),
         if (vm.loading && !vm.loaded)
           const Padding(padding: EdgeInsets.all(AppSpacing.xl), child: LoadingView())
         else if (vm.errorMessage case final msg? when !vm.loaded)
           Padding(padding: const EdgeInsets.all(AppSpacing.xl), child: ErrorView(message: msg, onRetry: vm.load))
-        else ...[
-          CountLabel('${vm.services.length} serviço(s)'),
-          if (vm.services.isEmpty)
-            const EmptyView(
-              icon: Icons.handyman_outlined,
-              message: 'Você ainda não cadastrou serviços.\nCadastre um para aparecer na busca dos clientes.',
-            )
-          else
-            for (final s in vm.services)
-              Card(
-                margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-                  leading: CircleAvatar(
-                    backgroundColor: theme.colorScheme.primaryContainer,
-                    foregroundColor: theme.colorScheme.onPrimaryContainer,
-                    child: Icon(CategoryModel.iconFor(s.category)),
-                  ),
-                  title: Text(s.title, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: AppSpacing.xs),
-                    child: Wrap(
-                      spacing: AppSpacing.sm,
-                      runSpacing: AppSpacing.xs,
-                      crossAxisAlignment: WrapCrossAlignment.center,
+        else if (vm.services.isEmpty)
+          const EmptyText('Você ainda não cadastrou serviços.\nCadastre um para aparecer na busca dos clientes.')
+        else
+          for (final s in vm.services)
+            BikoCard(
+              onTap: () => _openForm(s),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(s.category),
-                        Text('· ${Fmt.brl(s.price)} · ${Fmt.duration(s.durationMin)}'),
-                        Pill.active(context, active: s.active),
+                        Text(
+                          '${CategoryStyle.emojiOf(s.category)} ${s.title}',
+                          style: TextStyle(fontWeight: FontWeight.w700, color: c.ink),
+                        ),
+                        Text.rich(
+                          TextSpan(children: [
+                            TextSpan(text: '${s.category} · ${Fmt.duration(s.durationMin)} · '),
+                            TextSpan(text: Fmt.brl(s.price), style: TextStyle(fontWeight: FontWeight.w700, color: c.ink)),
+                          ]),
+                          style: TextStyle(color: c.muted, fontSize: 12.5),
+                        ),
                         if (s.realStats case final r? when r.count > 0 && r.medianMin != null)
-                          Text(
-                            'Tempo real típico: ${Fmt.duration(r.medianMin!)} (${r.count} atendimento(s)'
-                            '${r.extendedCount > 0 ? ' · ${r.extendedCount} com mais tempo' : ''})'
-                            '${r.suggestedMin != null && r.suggestedMin != s.durationMin ? ' · Sugestão: ${Fmt.duration(r.suggestedMin!)}' : ''}',
-                            style: theme.textTheme.bodySmall,
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text.rich(
+                              TextSpan(children: [
+                                TextSpan(text: 'Tempo real típico: ${Fmt.duration(r.medianMin!)} (${r.count} atendimento(s))'),
+                                if (r.suggestedMin != null && r.suggestedMin != s.durationMin)
+                                  TextSpan(
+                                    text: ' · sugestão: ${Fmt.duration(r.suggestedMin!)}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: r.suggestedMin! < s.durationMin ? c.green : const Color(0xFFC2410C),
+                                    ),
+                                  ),
+                              ]),
+                              style: const TextStyle(fontSize: 12),
+                            ),
                           ),
                       ],
                     ),
                   ),
-                  trailing: TextButton(onPressed: () => _openForm(s), child: const Text('Editar')),
-                  onTap: () => _openForm(s),
-                ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Tag(s.active ? 'Ativo' : 'Inativo', tone: s.active ? TagTone.green : TagTone.gray),
+                      LinkText('Editar', onTap: () => _openForm(s)),
+                    ],
+                  ),
+                ],
               ),
-        ],
+            ),
       ],
     );
   }
